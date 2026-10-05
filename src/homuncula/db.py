@@ -7,7 +7,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
