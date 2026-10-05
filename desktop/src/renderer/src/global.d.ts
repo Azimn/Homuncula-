@@ -6,6 +6,7 @@ declare global {
       health: () => Promise<any>;
       state: () => Promise<any>;
       threads: () => Promise<any[]>;
+      messages: (threadId: string) => Promise<any[]>;
       createThread: (title: string) => Promise<any>;
       chat: (threadId: string, content: string) => Promise<any>;
       responsibilities: () => Promise<any[]>;
