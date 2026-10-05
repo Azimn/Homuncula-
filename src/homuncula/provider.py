@@ -65,7 +65,7 @@ class OllamaProvider:
                 "available_models": models,
                 "selected_available": self.model in models,
             }
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError) as exc:
             return {
                 "ok": False,
                 "base_url": self.base_url,
