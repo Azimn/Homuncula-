@@ -15,9 +15,11 @@ from .context import ContextCompiler
 from .db import Database
 from .events import EventHub
 from .memory import MemoryStore
+from .plans import PlanStore
 from .processes import BackgroundProcessManager
 from .provider import OllamaProvider
 from .sentinel import Sentinel
+from .skills import SkillStore
 from .tool_specs import TOOLS
 from .windows_ui import WindowsUIProvider
 
@@ -64,6 +66,8 @@ class HomunculaRuntime:
         windows_ui: WindowsUIProvider,
         event_hub: EventHub,
         processes: BackgroundProcessManager,
+        plans: PlanStore,
+        skills: SkillStore,
     ):
         self.db = db
         self.computer = computer
@@ -75,6 +79,8 @@ class HomunculaRuntime:
         self.windows_ui = windows_ui
         self.event_hub = event_hub
         self.processes = processes
+        self.plans = plans
+        self.skills = skills
 
     def activity(
         self,
@@ -335,6 +341,8 @@ class HomunculaRuntime:
             "context": {
                 "estimated_tokens": bundle.estimated_tokens,
                 "memory_ids": bundle.memory_ids,
+                "skill_names": bundle.skill_names,
+                "plan_id": bundle.plan_id,
             },
         }
 
@@ -494,6 +502,111 @@ class HomunculaRuntime:
                 args["summary"],
                 args.get("evidence", []),
                 responsibility_id=responsibility_id,
+            )
+
+        if name == "plan_create":
+            if not responsibility_id:
+                return {"error": "plan_create requires an active responsibility"}
+            plan = self.plans.create(
+                responsibility_id,
+                title=args["title"],
+                goal=args["goal"],
+                steps=args["steps"],
+            )
+            self.activity(
+                "plan.created",
+                f"Created plan: {plan['title']}",
+                responsibility_id=responsibility_id,
+                metadata={"plan_id": plan["id"]},
+            )
+            return plan
+
+        if name == "plan_status":
+            if not responsibility_id:
+                return {"error": "plan_status requires an active responsibility"}
+            return {"plan": self.plans.active(responsibility_id)}
+
+        if name == "plan_advance":
+            if not responsibility_id:
+                return {"error": "plan_advance requires an active responsibility"}
+            plan = self.plans.active(responsibility_id)
+            if not plan:
+                return {"error": "No active plan"}
+            updated = self.plans.advance(plan["id"], summary=args["summary"])
+            self.activity(
+                "plan.advanced",
+                args["summary"],
+                responsibility_id=responsibility_id,
+                metadata={"plan_id": updated["id"], "status": updated["status"]},
+            )
+            return updated
+
+        if name == "plan_block":
+            if not responsibility_id:
+                return {"error": "plan_block requires an active responsibility"}
+            plan = self.plans.active(responsibility_id)
+            if not plan:
+                return {"error": "No active plan"}
+            updated = self.plans.block_step(plan["id"], reason=args["reason"])
+            self.activity(
+                "plan.blocked",
+                args["reason"],
+                responsibility_id=responsibility_id,
+                metadata={"plan_id": updated["id"]},
+            )
+            return updated
+
+        if name == "plan_resume":
+            updated = self.plans.resume(args["plan_id"])
+            self.activity(
+                "plan.resumed",
+                f"Resumed plan {updated['title']}",
+                responsibility_id=updated["responsibility_id"],
+                metadata={"plan_id": updated["id"]},
+            )
+            return updated
+
+        if name == "plan_fail":
+            if not responsibility_id:
+                return {"error": "plan_fail requires an active responsibility"}
+            plan = self.plans.active(responsibility_id)
+            if not plan:
+                return {"error": "No active plan"}
+            updated = self.plans.fail(plan["id"], reason=args["reason"])
+            self.activity(
+                "plan.failed",
+                args["reason"],
+                responsibility_id=responsibility_id,
+                metadata={"plan_id": updated["id"]},
+            )
+            return updated
+
+        if name == "skills_list":
+            return {"skills": self.skills.list()}
+
+        if name == "skill_read":
+            try:
+                return self.skills.get(args["name"]).as_dict()
+            except KeyError:
+                return {"error": f"Skill not found: {args['name']}"}
+
+        if name == "skill_install":
+            return await self._governed(
+                capability="skill.install",
+                target=args["name"],
+                intent=args["intent"],
+                args={
+                    "op": "install",
+                    "name": args["name"],
+                    "description": args["description"],
+                    "instructions": args["instructions"],
+                    "allowed_tools": args.get("allowed_tools", []),
+                    "source": "generated",
+                },
+                preview=f"Install local skill {args['name']}",
+                risk="local-extension",
+                responsibility_id=responsibility_id,
+                observation=observation,
             )
 
         if name == "process_status":
@@ -720,6 +833,27 @@ class HomunculaRuntime:
         responsibility_id: str | None,
         observation: bool,
     ) -> dict[str, Any]:
+        mutating = (
+            capability not in self.sentinel.INTERNAL_ALLOW
+            and capability not in self.sentinel.READ_ALLOW
+        )
+        if responsibility_id and mutating and not self.plans.active(responsibility_id):
+            self.activity(
+                "action.blocked",
+                f"Blocked {capability}: active plan required",
+                responsibility_id=responsibility_id,
+                metadata={"capability": capability, "target": target},
+            )
+            return {
+                "status": "blocked",
+                "reason": "active_plan_required",
+                "capability": capability,
+                "message": (
+                    "Create a durable plan for this responsibility before proposing "
+                    "mutating autonomous work."
+                ),
+            }
+
         decision = self.sentinel.request(
             capability=capability,
             target=target,
@@ -820,6 +954,14 @@ class HomunculaRuntime:
                     )
             elif capability == "windows.ui.interact":
                 result = await self._execute_windows_interaction(args)
+            elif capability == "skill.install":
+                result = self.skills.install(
+                    name=args["name"],
+                    description=args["description"],
+                    instructions=args["instructions"],
+                    allowed_tools=args.get("allowed_tools", []),
+                    source=args.get("source", "generated"),
+                )
             else:
                 raise ValueError(f"No executor for capability {capability}")
 
