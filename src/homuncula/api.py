@@ -446,6 +446,23 @@ def create_app(
     async def revoke_grant(grant_id: str) -> None:
         sentinel.revoke_grant(grant_id)
 
+    @app.get("/computer/status")
+    async def computer_status() -> dict[str, Any]:
+        return {
+            "workspace": str(settings.workspace),
+            "autonomy_paused": runtime.autonomy_paused(),
+            "browser": browser.status(),
+            "processes": processes.list(limit=25),
+        }
+
+    @app.get("/computer/windows")
+    async def computer_windows() -> dict[str, Any]:
+        try:
+            windows = await asyncio.to_thread(windows_ui.list_windows, limit=100)
+            return {"windows": windows}
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @app.get("/processes")
     async def process_list(limit: int = 100) -> list[dict[str, Any]]:
         return processes.list(limit=limit)
