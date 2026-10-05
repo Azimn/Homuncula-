@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import collections.abc
 import json
 import sqlite3
-from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -155,7 +155,7 @@ class Database:
                 pass
 
     @contextmanager
-    def transaction(self) -> Iterator[sqlite3.Connection]:
+    def transaction(self) -> collections.abc.Generator[sqlite3.Connection, None, None]:
         conn = self.connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
