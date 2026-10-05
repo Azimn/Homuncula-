@@ -19,7 +19,7 @@ class FakeRect:
 
 
 class FakeWrapper:
-    def __init__(self, name: str, children: list["FakeWrapper"] | None = None):
+    def __init__(self, name: str, children: list[FakeWrapper] | None = None):
         self.name = name
         self.element_info = FakeInfo()
         self._children = children or []
