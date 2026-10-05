@@ -231,6 +231,7 @@ def create_app(
     @app.get("/state")
     async def state() -> dict[str, Any]:
         return {
+            "autonomy_paused": runtime.autonomy_paused(),
             "responsibilities": runtime.list_responsibilities(),
             "pending_actions": sentinel.pending(),
             "findings": runtime.list_findings(status="new"),
@@ -238,6 +239,14 @@ def create_app(
                 "SELECT * FROM activities ORDER BY created_at DESC LIMIT 50"
             ),
         }
+
+    @app.post("/runtime/pause")
+    async def pause_runtime() -> dict[str, bool]:
+        return {"paused": runtime.set_autonomy_paused(True)}
+
+    @app.post("/runtime/resume")
+    async def resume_runtime() -> dict[str, bool]:
+        return {"paused": runtime.set_autonomy_paused(False)}
 
     @app.post("/threads")
     async def create_thread(request: ThreadRequest) -> dict[str, Any]:
