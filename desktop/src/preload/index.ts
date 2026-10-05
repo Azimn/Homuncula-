@@ -65,5 +65,7 @@ contextBridge.exposeInMainWorld("homuncula", {
   revokeGrant: (id: string) =>
     request("/grants/" + encodeURIComponent(id), "DELETE"),
   processes: () => request("/processes?limit=100"),
-  subscriptions: () => request("/subscriptions")
+  subscriptions: () => request("/subscriptions"),
+  computerStatus: () => request("/computer/status"),
+  windows: () => request("/computer/windows")
 });
