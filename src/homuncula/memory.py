@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import uuid
 from datetime import UTC, datetime
@@ -202,6 +203,15 @@ class MemoryStore:
         scope: str,
         limit: int,
     ) -> list[dict[str, Any]]:
+        terms = re.findall(r"[A-Za-z0-9_']+", query.lower())
+        fts_query = " OR ".join(
+            '"' + term.replace('"', '""') + '"'
+            for term in terms
+            if len(term) > 1
+        )
+        if not fts_query:
+            return []
+
         try:
             return self.db.all(
                 """
@@ -213,7 +223,7 @@ class MemoryStore:
                 ORDER BY bm25(memory_fts), m.created_at DESC
                 LIMIT ?
                 """,
-                (query, scope, limit),
+                (fts_query, scope, limit),
             )
         except sqlite3.OperationalError:
             like = f"%{query}%"
