@@ -31,6 +31,14 @@ class Sentinel:
             "runtime.subscribe_event",
             "responsibility.read",
             "finding.create",
+            "plan.create",
+            "plan.read",
+            "plan.advance",
+            "plan.block",
+            "plan.resume",
+            "plan.fail",
+            "skill.list",
+            "skill.read",
         }
     )
 
