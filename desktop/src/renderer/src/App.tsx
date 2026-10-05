@@ -57,7 +57,7 @@ function relativeTime(value: string): string {
   return Math.round(hours / 24) + "d ago";
 }
 
-function App(): JSX.Element {
+function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [responsibilities, setResponsibilities] = useState<Responsibility[]>([]);
   const [actions, setActions] = useState<Action[]>([]);
