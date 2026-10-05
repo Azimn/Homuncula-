@@ -16,7 +16,7 @@ class Settings:
     port: int
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         home = Path(os.environ.get("HOMUNCULA_HOME", Path.home() / ".homuncula")).expanduser()
         home.mkdir(parents=True, exist_ok=True)
 
