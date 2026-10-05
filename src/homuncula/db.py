@@ -91,6 +91,35 @@ CREATE TABLE IF NOT EXISTS memory_vectors (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS plans (
+    id TEXT PRIMARY KEY,
+    responsibility_id TEXT NOT NULL REFERENCES responsibilities(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL,
+    current_step INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_plans_responsibility_status
+ON plans(responsibility_id, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS plan_steps (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    status TEXT NOT NULL,
+    summary TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    UNIQUE(plan_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_plan_steps_plan
+ON plan_steps(plan_id, position);
+
 CREATE TABLE IF NOT EXISTS grants (
     id TEXT PRIMARY KEY,
     capability TEXT NOT NULL,
