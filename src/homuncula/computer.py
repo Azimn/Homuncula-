@@ -21,6 +21,9 @@ class WindowsHostComputer:
             raise WorkspaceViolation(f"Path escapes workspace: {relative}") from exc
         return candidate
 
+    def resolve_path(self, relative: str | Path) -> Path:
+        return self._resolve(relative)
+
     def list_files(self, relative: str = ".", *, limit: int = 200) -> dict[str, Any]:
         root = self._resolve(relative)
         if not root.exists():
