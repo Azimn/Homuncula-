@@ -35,7 +35,7 @@ class WindowsUIProvider:
             return existing
         reference = "uia_" + uuid.uuid4().hex
         try:
-            setattr(wrapper, "_homuncula_ref", reference)
+            wrapper._homuncula_ref = reference
         except (AttributeError, TypeError):
             pass
         self._registry[reference] = wrapper
@@ -96,7 +96,7 @@ class WindowsUIProvider:
             described["children"] = []
             if level >= depth or remaining <= 0:
                 return described
-            children = self._safe(getattr(node, "children", lambda: []), []) or []
+            children = self._safe(getattr(node, "children", list), []) or []
             for child in children:
                 if remaining <= 0:
                     break
