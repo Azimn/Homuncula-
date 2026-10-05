@@ -14,13 +14,10 @@ from watchfiles import Change, awatch
 
 from .db import Database
 
-
 WakeCallback = Callable[[str, str, dict[str, Any]], Awaitable[None]]
-
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
-
 
 class EventHub:
     def __init__(self, db: Database, wake_callback: WakeCallback):
@@ -97,7 +94,7 @@ class EventHub:
                 """,
                 (key, source, event_type, self.db.json(payload), now_iso()),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if "UNIQUE constraint failed" in str(exc):
                 return False
             raise
@@ -143,7 +140,6 @@ class EventHub:
             default=str,
         )
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
-
 
 class WorkspaceEventSource:
     def __init__(self, workspace: Path, hub: EventHub):
