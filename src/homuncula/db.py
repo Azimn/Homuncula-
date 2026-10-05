@@ -7,7 +7,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -176,7 +175,6 @@ CREATE TABLE IF NOT EXISTS background_processes (
     completed_at TEXT
 );
 """
-
 
 class Database:
     def __init__(self, path: Path):
