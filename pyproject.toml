@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "homuncula"
-version = "0.1.0"
-description = "Local-first persistent AI agent runtime for Windows"
+version = "0.2.0"
+description = "Windows-first local persistent AI agent runtime"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -13,7 +13,10 @@ dependencies = [
   "fastapi>=0.115,<1",
   "httpx>=0.27,<1",
   "pydantic>=2.9,<3",
-  "uvicorn[standard]>=0.30,<1"
+  "uvicorn[standard]>=0.30,<1",
+  "watchfiles>=1.0,<2",
+  "playwright>=1.52,<2",
+  "pywinauto>=0.6.9,<1; sys_platform == 'win32'"
 ]
 
 [project.optional-dependencies]
@@ -21,6 +24,9 @@ dev = [
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.24,<1",
   "ruff>=0.7,<1"
+]
+package = [
+  "pyinstaller>=6.11,<7"
 ]
 
 [project.scripts]
@@ -32,6 +38,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+  "browser: requires a Playwright browser runtime",
+  "windows: requires native Windows"
+]
 
 [tool.ruff]
 line-length = 100
