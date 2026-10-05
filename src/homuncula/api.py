@@ -17,6 +17,7 @@ from .context import ContextCompiler
 from .db import Database
 from .events import EventHub, WorkspaceEventSource
 from .memory import MemoryStore
+from .plans import PlanStore
 from .processes import BackgroundProcessManager
 from .provider import OllamaProvider
 from .runtime import HomunculaRuntime, WakeScheduler
@@ -27,6 +28,7 @@ from .secrets_store import (
     WindowsDPAPISecretStore,
 )
 from .sentinel import Sentinel
+from .skills import SkillStore
 from .windows_ui import WindowsUIProvider
 
 
@@ -94,9 +96,13 @@ def create_app(
     sentinel = Sentinel(db)
     provider = OllamaProvider(settings.ollama_base_url, settings.model)
     computer = WindowsHostComputer(settings.workspace)
+    plans = PlanStore(db)
+    skills = SkillStore(settings.home / "skills")
     context = ContextCompiler(
         db,
         memory,
+        plans,
+        skills,
         token_budget=settings.context_token_budget,
     )
     browser = browser or BrowserProvider(
@@ -137,6 +143,8 @@ def create_app(
         windows_ui,
         event_hub,
         processes,
+        plans,
+        skills,
     )
     runtime_holder["runtime"] = runtime
     scheduler = WakeScheduler(db, runtime.run_responsibility)
@@ -386,6 +394,41 @@ def create_app(
     @app.get("/findings")
     async def findings(status: str | None = None) -> list[dict[str, Any]]:
         return runtime.list_findings(status=status)
+
+    @app.get("/plans")
+    async def plans_list(
+        responsibility_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        return plans.list(
+            responsibility_id=responsibility_id,
+            limit=limit,
+        )
+
+    @app.get("/plans/{plan_id}")
+    async def plan_get(plan_id: str) -> dict[str, Any]:
+        try:
+            return plans.get(plan_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Plan not found") from None
+
+    @app.get("/skills")
+    async def skills_list() -> list[dict[str, Any]]:
+        return skills.list()
+
+    @app.get("/skills/{skill_name}")
+    async def skill_get(skill_name: str) -> dict[str, Any]:
+        try:
+            return skills.get(skill_name).as_dict()
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Skill not found") from None
+
+    @app.delete("/skills/{skill_name}", status_code=204)
+    async def skill_remove(skill_name: str) -> None:
+        try:
+            skills.remove(skill_name)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Skill not found") from None
 
     @app.get("/actions")
     async def actions(status: str | None = None) -> list[dict[str, Any]]:
