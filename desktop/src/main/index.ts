@@ -1,8 +1,9 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { join, resolve } from "node:path";
 import { electronApp, is } from "@electron-toolkit/utils";
 
+const API_BASE = "http://127.0.0.1:43900";
 let backend: ChildProcess | null = null;
 
 function startBackend(): void {
@@ -36,6 +37,30 @@ function startBackend(): void {
   });
 }
 
+function installApiBridge(): void {
+  ipcMain.handle(
+    "homuncula:request",
+    async (_event, path: string, method: string = "GET", body?: unknown) => {
+      if (!path.startsWith("/") || path.includes("://")) {
+        throw new Error("Invalid local API path");
+      }
+
+      const response = await fetch(API_BASE + path, {
+        method,
+        headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body)
+      });
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Homuncula request failed");
+      }
+
+      return response.json();
+    }
+  );
+}
+
 function createWindow(): void {
   const window = new BrowserWindow({
     width: 1320,
@@ -64,6 +89,7 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId("ai.homuncula.desktop");
+  installApiBridge();
   startBackend();
   createWindow();
 
