@@ -12,7 +12,6 @@ SENSITIVE_KEYS = frozenset(
     {
         "authorization",
         "credential",
-        "credential_ref",
         "password",
         "secret",
         "token",
