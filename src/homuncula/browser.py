@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-
 INJECTION_PATTERNS = (
     re.compile(r"ignore\\s+(all\\s+)?previous\\s+instructions", re.IGNORECASE),
     re.compile(r"reveal\\s+(the\\s+)?system\\s+prompt", re.IGNORECASE),
@@ -13,14 +12,11 @@ INJECTION_PATTERNS = (
     re.compile(r"developer\\s+message", re.IGNORECASE),
 )
 
-
 class BrowserUnavailable(RuntimeError):
     pass
 
-
 class BrowserReferenceError(LookupError):
     pass
-
 
 class BrowserProvider:
     def __init__(
@@ -55,7 +51,7 @@ class BrowserProvider:
             kwargs["channel"] = self.channel
         try:
             self._context = await self._playwright.chromium.launch_persistent_context(**kwargs)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             await self._playwright.stop()
             self._playwright = None
             raise BrowserUnavailable(str(exc)) from exc
@@ -95,7 +91,7 @@ class BrowserProvider:
         body = page.locator("body")
         try:
             aria = await body.aria_snapshot(timeout=5_000)
-        except Exception:  # noqa: BLE001
+        except Exception:
             aria = None
         text = (await body.inner_text(timeout=10_000))[:max_text]
         controls = await page.locator("[data-homuncula-ref]").evaluate_all(
