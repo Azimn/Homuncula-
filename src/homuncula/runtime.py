@@ -399,7 +399,7 @@ class HomunculaRuntime:
                 responsibility_id=responsibility_id,
                 metadata={"pending_actions": result["pending_actions"]},
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.db.execute(
                 "UPDATE responsibilities SET status = 'failed', updated_at = ? WHERE id = ?",
                 (now_iso(), responsibility_id),
@@ -534,7 +534,7 @@ class HomunculaRuntime:
                 metadata={"action_id": action_id, "result": result},
             )
             return {"status": "completed", "action_id": action_id, "result": result}
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.sentinel.fail(action_id, str(exc))
             self.activity(
                 "action.failed",
