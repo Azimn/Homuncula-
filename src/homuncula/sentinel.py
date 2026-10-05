@@ -78,7 +78,11 @@ class Sentinel:
         if capability not in self.KNOWN_CAPABILITIES:
             status = "denied"
             reason = "unknown capability"
-        elif (\n            force_approval\n            and capability not in self.INTERNAL_ALLOW\n            and capability not in self.READ_ALLOW\n        ):
+        elif (
+            force_approval
+            and capability not in self.INTERNAL_ALLOW
+            and capability not in self.READ_ALLOW
+        ):
             status = "pending"
             reason = "observation mode requires explicit approval"
         elif capability in self.INTERNAL_ALLOW or capability in self.READ_ALLOW:
