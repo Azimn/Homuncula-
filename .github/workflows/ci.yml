@@ -33,7 +33,7 @@ jobs:
         run: python -m pip install -e ".[dev]"
 
       - name: Ruff
-        run: python -m ruff check src/homuncula/db.py --fix --diff
+        run: python -m ruff check src tests
 
       - name: Tests
         run: python -m pytest -q
