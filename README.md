@@ -57,18 +57,24 @@ See docs/ARCHITECTURE.md for the design contract.
 
 ## Quick start
 
-Homuncula currently requires Python 3.11 or newer and a local Ollama installation.
+Homuncula currently requires Python 3.11 or newer, Node.js 22 or newer for the desktop development build, and a local Ollama installation.
 
-From PowerShell in the repository root:
+For the full desktop experience, run this from PowerShell in the repository root:
+
+    .\run-desktop.ps1
+
+The launcher creates the Python environment, installs the local runtime, installs the desktop dependencies on first use, starts the Electron application, and lets Electron manage the local agentd process.
+
+For backend-only development:
 
     .\run-local.ps1
 
-The runtime starts at http://127.0.0.1:43900 and expects Ollama at http://127.0.0.1:11434.
+The runtime listens only on http://127.0.0.1:43900 and expects Ollama at http://127.0.0.1:11434.
 
 The default model is qwen3:8b. Override it before launch when needed:
 
     $env:HOMUNCULA_MODEL = "your-model"
-    .\run-local.ps1
+    .\run-desktop.ps1
 
 ## Why the host replaces the VM
 
