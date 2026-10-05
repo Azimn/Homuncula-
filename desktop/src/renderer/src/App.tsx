@@ -105,6 +105,30 @@ function App(): JSX.Element {
     return () => window.clearInterval(timer);
   }, [refresh]);
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        const threads = await window.homuncula.threads();
+        if (!threads.length) return;
+
+        const id = threads[0].id as string;
+        const persisted = await window.homuncula.messages(id);
+        setThreadId(id);
+
+        if (persisted.length) {
+          setChat(
+            persisted.map((item: any) => ({
+              role: item.role === "user" ? "user" : "assistant",
+              content: item.content
+            }))
+          );
+        }
+      } catch {
+        // The runtime may still be starting. Periodic health refresh will recover.
+      }
+    })();
+  }, []);
+
   const activeCount = useMemo(
     () => responsibilities.filter((item) => item.status === "active").length,
     [responsibilities]
