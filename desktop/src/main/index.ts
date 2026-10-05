@@ -14,7 +14,7 @@ import { electronApp, is } from "@electron-toolkit/utils";
 
 const API_BASE = "http://127.0.0.1:43900";
 const ALLOWED_API_PATH =
-  /^\/(health|state|runtime|threads|responsibilities|actions|grants|activity|memory|findings|processes|subscriptions|secrets)(\/|\?|$)/;
+  /^\/(health|state|runtime|threads|responsibilities|actions|grants|activity|memory|findings|processes|subscriptions|secrets|computer)(\/|\?|$)/;
 
 let backend: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
