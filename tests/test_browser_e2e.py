@@ -9,7 +9,6 @@ import pytest
 
 from homuncula.browser import BrowserProvider
 
-
 HTML = b"""<!doctype html>
 <html>
 <head><title>Homuncula Browser Test</title></head>
@@ -20,7 +19,6 @@ HTML = b"""<!doctype html>
 </body>
 </html>"""
 
-
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -30,7 +28,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         return
-
 
 @pytest.mark.browser
 @pytest.mark.asyncio
