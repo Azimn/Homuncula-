@@ -91,7 +91,7 @@ class BrowserProvider:
         body = page.locator("body")
         try:
             aria = await body.aria_snapshot(timeout=5_000)
-        except Exception:
+        except Exception:  # noqa: BLE001
             aria = None
         text = (await body.inner_text(timeout=10_000))[:max_text]
         controls = await page.locator("[data-homuncula-ref]").evaluate_all(
