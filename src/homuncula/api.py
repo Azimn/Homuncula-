@@ -123,6 +123,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def threads() -> list[dict[str, Any]]:
         return db.all("SELECT * FROM threads ORDER BY updated_at DESC")
 
+    @app.get("/threads/{thread_id}/messages")
+    async def thread_messages(thread_id: str) -> list[dict[str, Any]]:
+        if not db.one("SELECT id FROM threads WHERE id = ?", (thread_id,)):
+            raise HTTPException(status_code=404, detail="Thread not found")
+        return db.all(
+            """
+            SELECT id, role, content, created_at
+            FROM messages
+            WHERE thread_id = ?
+            ORDER BY created_at ASC
+            LIMIT 500
+            """,
+            (thread_id,),
+        )
+
     @app.post("/threads/{thread_id}/chat")
     async def chat(thread_id: str, request: ChatRequest) -> dict[str, Any]:
         try:
