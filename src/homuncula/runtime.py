@@ -338,12 +338,37 @@ class HomunculaRuntime:
             },
         }
 
+    def autonomy_paused(self) -> bool:
+        return self.db.setting("runtime.paused", "0") == "1"
+
+    def set_autonomy_paused(self, paused: bool) -> bool:
+        self.db.set_setting("runtime.paused", "1" if paused else "0")
+        self.activity(
+            "runtime.paused" if paused else "runtime.resumed",
+            "Autonomous work paused by user" if paused else "Autonomous work resumed by user",
+        )
+        return paused
+
     async def run_responsibility(
         self,
         responsibility_id: str,
         reason: str,
         payload: dict[str, Any] | None = None,
     ) -> None:
+        if self.autonomy_paused():
+            self.activity(
+                "wake.deferred",
+                f"Deferred wake while autonomy is paused: {reason}",
+                responsibility_id=responsibility_id,
+            )
+            self.schedule_wake(
+                responsibility_id,
+                60,
+                "retry after autonomy pause",
+                payload=payload,
+            )
+            return
+
         responsibility = self.get_responsibility(responsibility_id)
         if responsibility["status"] != "active":
             return
