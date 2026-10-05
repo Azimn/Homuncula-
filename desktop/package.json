@@ -1,12 +1,13 @@
 {
   "name": "homuncula-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dist:win": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -20,8 +21,35 @@
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.4",
     "electron": "^38.2.1",
+    "electron-builder": "^26.0.12",
     "electron-vite": "^4.0.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.7"
+  },
+  "build": {
+    "appId": "ai.homuncula.desktop",
+    "productName": "Homuncula",
+    "artifactName": "Homuncula-Setup-${version}.${ext}",
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/agentd.exe",
+        "to": "agentd.exe"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
+    }
   }
 }
