@@ -8,16 +8,13 @@ from typing import Protocol
 
 import httpx
 
-
 TOKEN_RE = re.compile(r"[a-z0-9_']+")
-
 
 class Embedder(Protocol):
     name: str
     dimensions: int
 
     def embed(self, text: str) -> list[float]: ...
-
 
 @dataclass
 class HashEmbedder:
@@ -42,7 +39,6 @@ class HashEmbedder:
         if norm == 0:
             return vector
         return [value / norm for value in vector]
-
 
 class OllamaEmbedder:
     def __init__(
@@ -83,7 +79,6 @@ class OllamaEmbedder:
             self.name = self.fallback.name
             self.dimensions = self.fallback.dimensions
             return vector
-
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:
     if len(left) != len(right) or not left:
