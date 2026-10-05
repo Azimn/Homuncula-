@@ -6,10 +6,10 @@ from typing import Any
 from urllib.parse import urlparse
 
 INJECTION_PATTERNS = (
-    re.compile(r"ignore\\s+(all\\s+)?previous\\s+instructions", re.IGNORECASE),
-    re.compile(r"reveal\\s+(the\\s+)?system\\s+prompt", re.IGNORECASE),
-    re.compile(r"you\\s+are\\s+(chatgpt|an?\\s+ai|the\\s+assistant)", re.IGNORECASE),
-    re.compile(r"developer\\s+message", re.IGNORECASE),
+    re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
+    re.compile(r"reveal\s+(the\s+)?system\s+prompt", re.IGNORECASE),
+    re.compile(r"you\s+are\s+(chatgpt|an?\s+ai|the\s+assistant)", re.IGNORECASE),
+    re.compile(r"developer\s+message", re.IGNORECASE),
 )
 
 class BrowserUnavailable(RuntimeError):
