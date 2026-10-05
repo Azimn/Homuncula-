@@ -6,7 +6,6 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-
 TOKEN_FILENAME = "owner.token"
 REDACTED = "<redacted>"
 SENSITIVE_KEYS = frozenset(
@@ -19,7 +18,6 @@ SENSITIVE_KEYS = frozenset(
         "token",
     }
 )
-
 
 def load_or_create_owner_token(home: Path) -> str:
     supplied = os.environ.get("HOMUNCULA_OWNER_TOKEN", "").strip()
@@ -41,12 +39,10 @@ def load_or_create_owner_token(home: Path) -> str:
         pass
     return token
 
-
 def token_matches(expected: str, supplied: str | None) -> bool:
     if not supplied:
         return False
     return hmac.compare_digest(expected, supplied)
-
 
 def redact_payload(value: Any) -> Any:
     if isinstance(value, dict):
