@@ -10,3 +10,8 @@ build/
 node_modules/
 desktop/dist/
 desktop/out/
+
+desktop/resources/
+desktop/release/
+build/
+*.spec
