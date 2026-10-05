@@ -7,6 +7,8 @@ async function request(path: string, method = "GET", body?: unknown): Promise<an
 contextBridge.exposeInMainWorld("homuncula", {
   health: () => request("/health"),
   state: () => request("/state"),
+  pauseAutonomy: () => request("/runtime/pause", "POST"),
+  resumeAutonomy: () => request("/runtime/resume", "POST"),
   threads: () => request("/threads"),
   messages: (threadId: string) =>
     request("/threads/" + encodeURIComponent(threadId) + "/messages"),
