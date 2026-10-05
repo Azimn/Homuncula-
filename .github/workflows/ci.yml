@@ -7,6 +7,10 @@ on:
       - "build/**"
   pull_request:
 
+concurrency:
+  group: homuncula-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   python:
     name: Python tests on ${{ matrix.os }}
