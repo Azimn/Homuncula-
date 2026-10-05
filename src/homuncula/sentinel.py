@@ -21,19 +21,19 @@ class Decision:
 
 
 class Sentinel:
-    INTERNAL_ALLOW = {
+    INTERNAL_ALLOW = frozenset({
         "memory.search",
         "memory.remember",
         "runtime.schedule_wake",
         "responsibility.read",
-    }
+    })
 
-    READ_ALLOW = {
+    READ_ALLOW = frozenset({
         "filesystem.list",
         "filesystem.read",
-    }
+    })
 
-    KNOWN_CAPABILITIES = INTERNAL_ALLOW | READ_ALLOW | {
+    KNOWN_CAPABILITIES = INTERNAL_ALLOW | READ_ALLOW | frozenset({
         "filesystem.write",
         "process.exec",
         "browser.navigate",
@@ -42,7 +42,7 @@ class Sentinel:
         "windows.ui.interact",
         "network.http",
         "skill.install",
-    }
+    })
 
     def __init__(self, db: Database):
         self.db = db
