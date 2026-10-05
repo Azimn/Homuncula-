@@ -255,4 +255,84 @@ TOOLS = [
         },
         required=["ref", "direction", "intent"],
     ),
+    function_tool(
+        "plan_create",
+        "Create the durable step-by-step plan for the active responsibility before autonomous mutations.",
+        {
+            "title": {"type": "string"},
+            "goal": {"type": "string"},
+            "steps": {
+                "type": "array",
+                "items": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "detail": {"type": "string"},
+                            },
+                            "required": ["title"],
+                        },
+                    ]
+                },
+            },
+        },
+        required=["title", "goal", "steps"],
+    ),
+    function_tool(
+        "plan_status",
+        "Read the current durable plan for the active responsibility.",
+        {},
+    ),
+    function_tool(
+        "plan_advance",
+        "Mark the active plan step complete and move to the next step.",
+        {"summary": {"type": "string"}},
+        required=["summary"],
+    ),
+    function_tool(
+        "plan_block",
+        "Mark the active plan step blocked with a concrete reason.",
+        {"reason": {"type": "string"}},
+        required=["reason"],
+    ),
+    function_tool(
+        "plan_resume",
+        "Resume a blocked plan.",
+        {"plan_id": {"type": "string"}},
+        required=["plan_id"],
+    ),
+    function_tool(
+        "plan_fail",
+        "Fail the active plan when it cannot safely or correctly continue.",
+        {"reason": {"type": "string"}},
+        required=["reason"],
+    ),
+    function_tool(
+        "skills_list",
+        "List installed local declarative skills.",
+        {},
+    ),
+    function_tool(
+        "skill_read",
+        "Read an installed local skill by name.",
+        {"name": {"type": "string"}},
+        required=["name"],
+    ),
+    function_tool(
+        "skill_install",
+        "Propose installing a reusable local declarative skill.",
+        {
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+            "instructions": {"type": "string"},
+            "allowed_tools": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "intent": {"type": "string"},
+        },
+        required=["name", "description", "instructions", "intent"],
+    ),
 ]
