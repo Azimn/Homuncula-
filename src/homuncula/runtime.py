@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from .computer import WindowsHostComputer
 from .db import Database
@@ -398,7 +399,7 @@ class HomunculaRuntime:
                 responsibility_id=responsibility_id,
                 metadata={"pending_actions": result["pending_actions"]},
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self.db.execute(
                 "UPDATE responsibilities SET status = 'failed', updated_at = ? WHERE id = ?",
                 (now_iso(), responsibility_id),
@@ -533,7 +534,7 @@ class HomunculaRuntime:
                 metadata={"action_id": action_id, "result": result},
             )
             return {"status": "completed", "action_id": action_id, "result": result}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self.sentinel.fail(action_id, str(exc))
             self.activity(
                 "action.failed",
@@ -573,7 +574,7 @@ class WakeScheduler:
                         "UPDATE wakes SET status = 'completed', completed_at = ? WHERE id = ?",
                         (now_iso(), wake["id"]),
                     )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     self.db.execute(
                         """
                         UPDATE wakes
