@@ -61,6 +61,15 @@ class BrowserProvider:
             raise BrowserUnavailable(str(exc)) from exc
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
 
+    def status(self) -> dict[str, Any]:
+        return {
+            "started": self._context is not None,
+            "url": self._page.url if self._page is not None else None,
+            "profile_dir": str(self.profile_dir),
+            "channel": self.channel,
+            "headless": self.headless,
+        }
+
     async def close(self) -> None:
         if self._context is not None:
             await self._context.close()
