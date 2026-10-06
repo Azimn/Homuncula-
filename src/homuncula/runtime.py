@@ -14,6 +14,7 @@ from .computer import WindowsHostComputer
 from .context import ContextCompiler
 from .db import Database
 from .events import EventHub
+from .guardrails import ToolLoopGuard
 from .memory import MemoryStore
 from .plans import PlanStore
 from .processes import BackgroundProcessManager
@@ -21,6 +22,7 @@ from .provider import OllamaProvider
 from .sentinel import Sentinel
 from .skills import SkillStore
 from .tool_specs import TOOLS
+from .verification import VerificationStore
 from .windows_ui import WindowsUIProvider
 
 
@@ -48,8 +50,9 @@ Use durable memory for facts, preferences, decisions, relationships, and commitm
 likely to matter later. Use event subscriptions and scheduled wakes only for concrete future
 dependencies. Avoid polling loops.
 
-Do not expose hidden chain-of-thought. Report conclusions, evidence, completed operations,
-pending approvals, and future dependencies.
+Do not claim work is verified unless verification evidence shows a relevant successful check.
+Targeted checks prove only their actual scope. Do not expose hidden chain-of-thought. Report
+conclusions, evidence, completed operations, pending approvals, and future dependencies.
 """.strip()
 
 
@@ -81,6 +84,7 @@ class HomunculaRuntime:
         self.processes = processes
         self.plans = plans
         self.skills = skills
+        self.verification = VerificationStore(db)
 
     def activity(
         self,
@@ -269,6 +273,22 @@ class HomunculaRuntime:
             *bundle.messages,
         ]
 
+        evidence = self.verification.summary(responsibility_id)
+        if evidence["total"]:
+            lines = []
+            for kind, row in evidence["latest_by_kind"].items():
+                command = " ".join(row["command"])
+                lines.append(
+                    f"{kind}: {row['status']} exit={row['returncode']} command={command}"
+                )
+            messages.insert(
+                1,
+                {
+                    "role": "system",
+                    "content": "Latest verification evidence:\n" + "\n".join(lines),
+                },
+            )
+
         if observation:
             messages.insert(
                 1,
@@ -283,6 +303,8 @@ class HomunculaRuntime:
 
         pending_actions: list[str] = []
         final_content = ""
+        loop_guard = ToolLoopGuard()
+        loop_blocks = 0
 
         for _ in range(20):
             response = await self.provider.chat(messages, TOOLS)
@@ -306,12 +328,45 @@ class HomunculaRuntime:
                 if isinstance(args, str):
                     args = json.loads(args)
 
-                result = await self._call_tool(
-                    name,
-                    args,
-                    responsibility_id=responsibility_id,
-                    observation=observation,
-                )
+                guard_decision = loop_guard.before(name, args)
+                if not guard_decision.allowed:
+                    loop_blocks += 1
+                    result = {
+                        "status": "blocked",
+                        "reason": "tool_loop_guard",
+                        "code": guard_decision.code,
+                        "message": guard_decision.message,
+                    }
+                    self.activity(
+                        "guardrail.blocked",
+                        guard_decision.message,
+                        responsibility_id=responsibility_id,
+                        metadata={"tool": name, "code": guard_decision.code},
+                    )
+                else:
+                    result = await self._call_tool(
+                        name,
+                        args,
+                        responsibility_id=responsibility_id,
+                        observation=observation,
+                    )
+                    after_decision = loop_guard.after(name, args, result)
+                    if not after_decision.allowed:
+                        loop_blocks += 1
+                        result = {
+                            **result,
+                            "guardrail": {
+                                "code": after_decision.code,
+                                "message": after_decision.message,
+                            },
+                        }
+                        self.activity(
+                            "guardrail.warning",
+                            after_decision.message,
+                            responsibility_id=responsibility_id,
+                            metadata={"tool": name, "code": after_decision.code},
+                        )
+
                 if result.get("status") == "approval_required":
                     pending_actions.append(result["action_id"])
 
@@ -327,6 +382,13 @@ class HomunculaRuntime:
                 final_content = (
                     response.content
                     or "I prepared an action that requires approval before it can run."
+                )
+                break
+
+            if loop_blocks >= 2:
+                final_content = (
+                    response.content
+                    or "I stopped this turn because repeated tool calls were not making progress."
                 )
                 break
 
@@ -676,6 +738,7 @@ class HomunculaRuntime:
                     "argv": argv,
                     "cwd": args.get("cwd", "."),
                     "timeout": int(args.get("timeout", 120)),
+                    "responsibility_id": responsibility_id,
                 },
                 preview="Run process: " + " ".join(argv),
                 risk="execute",
@@ -910,6 +973,12 @@ class HomunculaRuntime:
                     cwd=args.get("cwd", "."),
                     timeout=int(args.get("timeout", 120)),
                 )
+                evidence = self.verification.record_process(
+                    action_id=action_id,
+                    responsibility_id=args.get("responsibility_id"),
+                    result=result,
+                )
+                result = {**result, "verification_id": evidence["id"]}
             elif capability == "process.start":
                 result = await self.processes.start(
                     args["argv"],
