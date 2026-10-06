@@ -139,7 +139,7 @@ TOOLS = [
     ),
     function_tool(
         "remember",
-        "Store a durable fact, preference, decision, relationship fact, or commitment.",
+        "Store user-provided or internally owned durable facts, preferences, decisions, relationship facts, or commitments. External factual claims should use the evidence gate.",
         {
             "content": {"type": "string"},
             "scope": {"type": "string", "default": "global"},
