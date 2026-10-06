@@ -389,8 +389,14 @@ class Database:
 
     def initialize(self) -> None:
         with self.connect() as conn:
-            conn.executescript(BASE_SCHEMA)
             conn.executescript(MIGRATION_LEDGER_SCHEMA)
+            ledger = conn.execute(
+                "SELECT COUNT(*) AS count FROM schema_migrations"
+            ).fetchone()
+            if ledger and int(ledger["count"]) > 0:
+                self._validate_migration_ledger(conn)
+
+            conn.executescript(BASE_SCHEMA)
             self._ensure_migration_baseline(conn)
             self._validate_migration_ledger(conn)
             self._apply_pending_migrations(conn)
