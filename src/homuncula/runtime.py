@@ -19,6 +19,7 @@ from .memory import MemoryStore
 from .plans import PlanStore
 from .processes import BackgroundProcessManager
 from .provider import OllamaProvider
+from .review import PostTurnReviewer
 from .sentinel import Sentinel
 from .skills import SkillStore
 from .tool_specs import TOOLS
@@ -71,6 +72,7 @@ class HomunculaRuntime:
         processes: BackgroundProcessManager,
         plans: PlanStore,
         skills: SkillStore,
+        review_enabled: bool = True,
     ):
         self.db = db
         self.computer = computer
@@ -85,6 +87,9 @@ class HomunculaRuntime:
         self.plans = plans
         self.skills = skills
         self.verification = VerificationStore(db)
+        self.review_enabled = review_enabled
+        self.reviewer = PostTurnReviewer(provider, memory, skills, sentinel)
+        self._review_tasks: set[asyncio.Task[None]] = set()
 
     def activity(
         self,
@@ -396,6 +401,9 @@ class HomunculaRuntime:
             final_content = "The local model completed the turn without additional text."
 
         self._store_message(thread_id, "assistant", final_content)
+        if self.review_enabled and responsibility_id is None and not observation:
+            self._schedule_review(thread_id)
+
         return {
             "content": final_content,
             "pending_actions": pending_actions,
@@ -407,6 +415,55 @@ class HomunculaRuntime:
                 "plan_id": bundle.plan_id,
             },
         }
+
+    def _schedule_review(self, thread_id: str) -> None:
+        task = asyncio.create_task(
+            self._run_review(thread_id),
+            name=f"homuncula-review-{thread_id[:8]}",
+        )
+        self._review_tasks.add(task)
+        task.add_done_callback(self._review_tasks.discard)
+
+    async def _run_review(self, thread_id: str) -> None:
+        try:
+            await asyncio.sleep(2.0)
+            rows = self.db.all(
+                """
+                SELECT role, content
+                FROM messages
+                WHERE thread_id = ?
+                ORDER BY created_at DESC
+                LIMIT 12
+                """,
+                (thread_id,),
+            )
+            rows.reverse()
+            result = await self.reviewer.review(rows)
+            self.activity(
+                "review.completed",
+                (
+                    f"Post-turn review stored {result['memories_added']} memories "
+                    f"and proposed {len(result['skill_actions'])} skills"
+                ),
+                metadata=result,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.activity(
+                "review.failed",
+                str(exc),
+                metadata={"thread_id": thread_id},
+            )
+
+    async def shutdown(self) -> None:
+        tasks = list(self._review_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._review_tasks.clear()
 
     def autonomy_paused(self) -> bool:
         return self.db.setting("runtime.paused", "0") == "1"
