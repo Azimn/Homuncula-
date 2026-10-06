@@ -359,6 +359,18 @@ MIGRATIONS = (
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version
 
 
+def _validate_migration_registry() -> None:
+    versions = [migration.version for migration in MIGRATIONS]
+    expected = list(range(BASELINE_VERSION + 1, CURRENT_SCHEMA_VERSION + 1))
+    if versions != expected:
+        raise DatabaseMigrationError(
+            "Migration registry versions must be contiguous and ordered"
+        )
+    names = [migration.name for migration in MIGRATIONS]
+    if len(names) != len(set(names)):
+        raise DatabaseMigrationError("Migration registry names must be unique")
+
+
 def _migration_statements(script: str) -> list[str]:
     statements: list[str] = []
     buffer = ""
@@ -388,6 +400,7 @@ class Database:
         return conn
 
     def initialize(self) -> None:
+        _validate_migration_registry()
         with self.connect() as conn:
             conn.executescript(MIGRATION_LEDGER_SCHEMA)
             ledger = conn.execute(
