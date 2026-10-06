@@ -5,8 +5,6 @@ import re
 import uuid
 from typing import Any
 
-import httpx
-
 from .evidence import REVIEW_ROLES, VALID_VERDICTS, EvidenceStore
 from .provider import OllamaProvider
 
@@ -189,7 +187,7 @@ class EvidenceCouncil:
                     unknowns=normalized["unknowns"],
                     valid=True,
                 )
-            except (httpx.HTTPError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            except Exception as exc:  # noqa: BLE001
                 self.evidence.record_review(
                     dossier_id,
                     round_id,
