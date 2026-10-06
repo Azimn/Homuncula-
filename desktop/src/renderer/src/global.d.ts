@@ -4,6 +4,7 @@ declare global {
   interface Window {
     homuncula: {
       health: () => Promise<any>;
+      restartRuntime: () => Promise<any>;
       state: () => Promise<any>;
       pauseAutonomy: () => Promise<any>;
       resumeAutonomy: () => Promise<any>;
@@ -27,6 +28,9 @@ declare global {
       execute: (id: string) => Promise<any>;
       activity: () => Promise<any[]>;
       findings: (status?: string) => Promise<any[]>;
+      plans: (responsibilityId?: string) => Promise<any[]>;
+      skills: () => Promise<any[]>;
+      verification: (responsibilityId?: string) => Promise<any>;
       memory: (query?: string) => Promise<any[]>;
       reviseMemory: (
         id: string,
@@ -46,6 +50,8 @@ declare global {
       subscriptions: () => Promise<any[]>;
       computerStatus: () => Promise<any>;
       windows: () => Promise<any>;
+      gitStatus: () => Promise<any>;
+      gitDiff: (path: string, staged?: boolean) => Promise<any>;
     };
   }
 }
