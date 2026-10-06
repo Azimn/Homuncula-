@@ -438,14 +438,17 @@ class EvidenceStore:
         reviews = [self._decode_review(row) for row in rows]
         by_role = {row["role"]: row for row in reviews}
 
+        unknowns = list(dossier["declared_unknowns"])
+        for review in reviews:
+            unknowns.extend(review["unknowns"])
+        unknowns = list(dict.fromkeys(item for item in unknowns if item))[:40]
+
         status = "hold"
         if set(by_role) == set(REVIEW_ROLES) and all(row["valid"] for row in reviews):
             verifier = by_role["verifier"]["verdict"]
             skeptic = by_role["skeptic"]["verdict"]
             integrator = by_role["integrator"]["verdict"]
-            if verifier == "pass" and skeptic == "pass" and integrator == "pass":
-                status = "pass"
-            elif (
+            if (
                 verifier == "reject"
                 and skeptic == "reject"
             ) or (
@@ -453,6 +456,13 @@ class EvidenceStore:
                 and (verifier == "reject" or skeptic == "reject")
             ):
                 status = "reject"
+            elif (
+                verifier == "pass"
+                and skeptic == "pass"
+                and integrator == "pass"
+                and not unknowns
+            ):
+                status = "pass"
 
         critical = [
             by_role[role]["confidence"]
@@ -460,11 +470,6 @@ class EvidenceStore:
             if role in by_role and by_role[role]["valid"]
         ]
         confidence = sum(critical) / len(critical) if critical else 0.0
-
-        unknowns = list(dossier["declared_unknowns"])
-        for review in reviews:
-            unknowns.extend(review["unknowns"])
-        unknowns = list(dict.fromkeys(item for item in unknowns if item))[:40]
 
         stamp = now_iso()
         self.db.execute(
