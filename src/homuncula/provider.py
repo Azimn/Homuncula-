@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,6 +23,7 @@ class OllamaProvider:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        self._chat_lock = asyncio.Lock()
 
     async def chat(
         self,
@@ -36,8 +38,9 @@ class OllamaProvider:
         if tools:
             payload["tools"] = tools
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(f"{self.base_url}/api/chat", json=payload)
+        async with self._chat_lock:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(f"{self.base_url}/api/chat", json=payload)
 
         if response.status_code >= 400:
             raise ProviderError(
