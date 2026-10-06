@@ -17,6 +17,7 @@ from .config import Settings
 from .context import ContextCompiler
 from .db import Database
 from .events import EventHub, WorkspaceEventSource
+from .git_inspector import GitInspector, GitUnavailable
 from .memory import MemoryStore
 from .plans import PlanStore
 from .processes import BackgroundProcessManager
@@ -126,6 +127,7 @@ def create_app(
     db.initialize()
     memory = MemoryStore(db)
     sentinel = Sentinel(db)
+    git = GitInspector(settings.workspace)
     selected_model = db.setting("runtime.model", settings.model) or settings.model
     provider = OllamaProvider(settings.ollama_base_url, selected_model)
     computer = WindowsHostComputer(settings.workspace)
@@ -723,6 +725,25 @@ def create_app(
     @app.delete("/grants/{grant_id}", status_code=204)
     async def revoke_grant(grant_id: str) -> None:
         sentinel.revoke_grant(grant_id)
+
+    @app.get("/computer/git")
+    async def computer_git() -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(git.status)
+        except GitUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/computer/git/diff")
+    async def computer_git_diff(
+        path: str,
+        staged: bool = False,
+    ) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(git.diff, path, staged=staged)
+        except PermissionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except GitUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/computer/status")
     async def computer_status() -> dict[str, Any]:
