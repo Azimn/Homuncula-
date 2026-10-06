@@ -9,7 +9,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import BinaryIO
 
-
 DEFAULT_CAPTURE_BYTES = 100_000
 
 PROCESS_ENV_ALLOWLIST = frozenset(
