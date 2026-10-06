@@ -9,5 +9,5 @@ if (-not (Test-Path ".venv")) {
 
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 & $Python -m pip install --upgrade pip
-& $Python -m pip install -e ".[dev]"
+& $Python -m pip install -e ".[dev,voice]"
 & $Python -m homuncula.main
