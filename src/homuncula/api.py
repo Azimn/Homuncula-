@@ -145,6 +145,7 @@ def create_app(
         processes,
         plans,
         skills,
+        review_enabled=settings.review_enabled,
     )
     runtime_holder["runtime"] = runtime
     scheduler = WakeScheduler(db, runtime.run_responsibility)
@@ -183,6 +184,7 @@ def create_app(
         finally:
             workspace_events.stop()
             scheduler.stop()
+            await runtime.shutdown()
             await processes.shutdown()
             await browser.close()
             await scheduler_task
@@ -231,6 +233,7 @@ def create_app(
             "workspace": str(settings.workspace),
             "database": str(settings.db_path),
             "proactive_enabled": settings.proactive_enabled,
+            "review_enabled": settings.review_enabled,
             "browser_channel": settings.browser_channel,
             "secret_store": type(secret_store).__name__,
             "provider": await provider.health(),
