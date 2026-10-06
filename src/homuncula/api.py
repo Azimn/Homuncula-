@@ -74,6 +74,22 @@ class MemoryRevisionRequest(BaseModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
+class EvidenceObservationRequest(BaseModel):
+    source_kind: str = Field(min_length=1, max_length=80)
+    source_locator: str = Field(min_length=1, max_length=4000)
+    source_title: str | None = Field(default=None, max_length=500)
+    content: str = Field(min_length=1, max_length=50000)
+    responsibility_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvidenceDossierRequest(BaseModel):
+    claim: str = Field(min_length=8, max_length=8000)
+    observation_ids: list[str] = Field(min_length=1, max_length=20)
+    responsibility_id: str | None = None
+    unknowns: list[str] = Field(default_factory=list, max_length=20)
+
+
 class GrantRequest(BaseModel):
     capability: str
     resource_pattern: str
@@ -217,6 +233,7 @@ def create_app(
     app.state.settings = settings
     app.state.db = db
     app.state.memory = memory
+    app.state.evidence = runtime.evidence
     app.state.sentinel = sentinel
     app.state.runtime = runtime
     app.state.events = event_hub
@@ -489,6 +506,94 @@ def create_app(
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="Memory not found") from None
+
+    @app.post("/evidence/observations")
+    async def evidence_capture(
+        request: EvidenceObservationRequest,
+    ) -> dict[str, Any]:
+        try:
+            return runtime.evidence.capture_observation(
+                source_kind=request.source_kind,
+                source_locator=request.source_locator,
+                source_title=request.source_title,
+                content=request.content,
+                responsibility_id=request.responsibility_id,
+                metadata=request.metadata,
+            )
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail="Responsibility not found",
+            ) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/evidence/observations")
+    async def evidence_observations(
+        responsibility_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        return runtime.evidence.list_observations(
+            responsibility_id=responsibility_id,
+            limit=limit,
+        )
+
+    @app.post("/evidence/dossiers")
+    async def evidence_dossier_create(
+        request: EvidenceDossierRequest,
+    ) -> dict[str, Any]:
+        try:
+            return runtime.evidence.create_dossier(
+                request.claim,
+                request.observation_ids,
+                responsibility_id=request.responsibility_id,
+                unknowns=request.unknowns,
+            )
+        except KeyError as exc:
+            missing = str(exc.args[0])
+            detail = (
+                "Responsibility not found"
+                if request.responsibility_id == missing
+                else f"Evidence observation not found: {missing}"
+            )
+            raise HTTPException(status_code=404, detail=detail) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/evidence/dossiers")
+    async def evidence_dossiers(
+        responsibility_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        try:
+            return runtime.evidence.list_dossiers(
+                responsibility_id=responsibility_id,
+                status=status,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/evidence/dossiers/{dossier_id}")
+    async def evidence_dossier_get(dossier_id: str) -> dict[str, Any]:
+        try:
+            return runtime.evidence.get_dossier(dossier_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail="Evidence dossier not found",
+            ) from None
+
+    @app.post("/evidence/dossiers/{dossier_id}/review")
+    async def evidence_dossier_review(dossier_id: str) -> dict[str, Any]:
+        try:
+            return await runtime.evidence_council.review(dossier_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail="Evidence dossier not found",
+            ) from None
 
     @app.get("/findings")
     async def findings(status: str | None = None) -> list[dict[str, Any]]:
