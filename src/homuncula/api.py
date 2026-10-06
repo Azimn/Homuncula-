@@ -82,6 +82,10 @@ class SecretRequest(BaseModel):
     value: str = Field(min_length=1)
 
 
+class ModelRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -94,7 +98,8 @@ def create_app(
     db.initialize()
     memory = MemoryStore(db)
     sentinel = Sentinel(db)
-    provider = OllamaProvider(settings.ollama_base_url, settings.model)
+    selected_model = db.setting("runtime.model", settings.model) or settings.model
+    provider = OllamaProvider(settings.ollama_base_url, selected_model)
     computer = WindowsHostComputer(settings.workspace)
     plans = PlanStore(db)
     skills = SkillStore(settings.home / "skills")
@@ -238,6 +243,47 @@ def create_app(
             "secret_store": type(secret_store).__name__,
             "provider": await provider.health(),
         }
+
+    @app.get("/models")
+    async def models() -> dict[str, Any]:
+        try:
+            available = await provider.list_models()
+            return {
+                "ok": True,
+                "selected": provider.model,
+                "available": available,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "selected": provider.model,
+                "available": [],
+                "error": str(exc),
+            }
+
+    @app.post("/models/select")
+    async def select_model(request: ModelRequest) -> dict[str, str]:
+        try:
+            available = await provider.list_models()
+            if request.model not in available:
+                raise HTTPException(status_code=404, detail="Model is not installed")
+            selected = provider.select_model(request.model)
+            db.set_setting("runtime.model", selected)
+            return {"model": selected}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/models/pull")
+    async def pull_model(request: ModelRequest) -> dict[str, Any]:
+        try:
+            result = await provider.pull_model(request.model)
+            selected = provider.select_model(request.model)
+            db.set_setting("runtime.model", selected)
+            return {"model": selected, "result": result}
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/state")
     async def state() -> dict[str, Any]:
