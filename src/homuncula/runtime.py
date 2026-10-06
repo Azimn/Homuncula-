@@ -690,7 +690,7 @@ class HomunculaRuntime:
             self.evidence.mark_promoted(dossier["id"], memory["id"])
             self.activity(
                 "evidence.promoted",
-                f"Promoted PASS evidence dossier to durable memory",
+                "Promoted PASS evidence dossier to durable memory",
                 responsibility_id=responsibility_id,
                 metadata={
                     "dossier_id": dossier["id"],
