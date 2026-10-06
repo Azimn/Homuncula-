@@ -230,6 +230,23 @@ CREATE TABLE IF NOT EXISTS evidence_sources (
     UNIQUE(kind, locator)
 );
 
+CREATE TABLE IF NOT EXISTS evidence_read_receipts (
+    id TEXT PRIMARY KEY,
+    action_id TEXT NOT NULL REFERENCES actions(id) ON DELETE RESTRICT,
+    responsibility_id TEXT REFERENCES responsibilities(id) ON DELETE SET NULL,
+    capability TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    locator TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(action_id)
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_read_receipts_responsibility_time
+ON evidence_read_receipts(responsibility_id, created_at);
+
 CREATE TABLE IF NOT EXISTS evidence_observations (
     id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL REFERENCES evidence_sources(id) ON DELETE RESTRICT,
@@ -242,6 +259,15 @@ CREATE TABLE IF NOT EXISTS evidence_observations (
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_observations_responsibility_time
 ON evidence_observations(responsibility_id, observed_at);
+
+CREATE TABLE IF NOT EXISTS evidence_observation_receipts (
+    observation_id TEXT NOT NULL REFERENCES evidence_observations(id) ON DELETE CASCADE,
+    receipt_id TEXT NOT NULL REFERENCES evidence_read_receipts(id) ON DELETE RESTRICT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(observation_id, receipt_id)
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_observation_receipts_receipt
+ON evidence_observation_receipts(receipt_id);
 
 CREATE TABLE IF NOT EXISTS evidence_dossiers (
     id TEXT PRIMARY KEY,
