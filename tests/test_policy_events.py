@@ -36,6 +36,16 @@ def test_observation_cannot_consume_mutation_grant(tmp_path: Path) -> None:
     )
     assert observed.status == "pending"
 
+    download = sentinel.request(
+        capability="browser.download",
+        target="downloads",
+        intent="save browser artifact",
+        args={"directory": "downloads"},
+        preview="download",
+        risk="local-write",
+    )
+    assert download.status == "pending"
+
     read = sentinel.request(
         capability="filesystem.read",
         target="src/app.py",

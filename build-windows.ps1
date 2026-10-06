@@ -26,6 +26,7 @@ $PyInstallerArgs = @(
     "--specpath", (Join-Path $Root "build"),
     "--collect-all", "playwright",
     "--collect-all", "pywinauto",
+    "--collect-all", "sherpa_onnx",
     (Join-Path $Root "agentd_entry.py")
 )
 & $Python -m PyInstaller @PyInstallerArgs

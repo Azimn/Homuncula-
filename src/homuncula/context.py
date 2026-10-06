@@ -159,6 +159,42 @@ class ContextCompiler:
                     reserve=self.token_budget // 4,
                 )
 
+            dossiers = self.db.all(
+                """
+                SELECT id, claim, status, confidence, unknowns_json, updated_at
+                FROM evidence_dossiers
+                WHERE responsibility_id = ?
+                  AND status IN ('pass', 'hold')
+                ORDER BY updated_at DESC
+                LIMIT 6
+                """,
+                (responsibility_id,),
+            )
+            if dossiers:
+                lines = []
+                for dossier in dossiers:
+                    unknowns = json.loads(dossier["unknowns_json"] or "[]")
+                    unresolved = "; ".join(str(item) for item in unknowns[:3])
+                    line = (
+                        f"{dossier['id']} [{dossier['status'].upper()}; "
+                        f"confidence={float(dossier['confidence']):.2f}] "
+                        f"{dossier['claim']}"
+                    )
+                    if unresolved:
+                        line += f" | unknowns: {unresolved}"
+                    lines.append(line)
+                consumed = self._append_if_fits(
+                    messages,
+                    (
+                        "Epistemic evidence state:\n"
+                        + "\n".join(lines)
+                        + "\nPASS claims may be promoted to durable memory. "
+                        "HOLD claims remain unresolved and must not be stated as established fact."
+                    ),
+                    consumed,
+                    reserve=self.token_budget // 4,
+                )
+
             activities = self.db.all(
                 """
                 SELECT kind, message, metadata_json, created_at

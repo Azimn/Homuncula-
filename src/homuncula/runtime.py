@@ -14,13 +14,18 @@ from .computer import WindowsHostComputer
 from .context import ContextCompiler
 from .db import Database
 from .events import EventHub
+from .evidence import EvidenceStore
+from .evidence_review import EvidenceCouncil
+from .guardrails import ToolLoopGuard
 from .memory import MemoryStore
 from .plans import PlanStore
 from .processes import BackgroundProcessManager
 from .provider import OllamaProvider
+from .review import PostTurnReviewer
 from .sentinel import Sentinel
 from .skills import SkillStore
 from .tool_specs import TOOLS
+from .verification import VerificationStore
 from .windows_ui import WindowsUIProvider
 
 
@@ -44,12 +49,21 @@ During proactive observation, investigate using read-only capabilities. You may 
 finding or propose an action, but do not silently perform mutations even when a standing grant
 would normally allow them.
 
-Use durable memory for facts, preferences, decisions, relationships, and commitments that are
-likely to matter later. Use event subscriptions and scheduled wakes only for concrete future
-dependencies. Avoid polling loops.
+Use durable memory for user-provided facts, preferences, decisions, relationships, and
+commitments that are likely to matter later. Externally derived factual claims should not jump
+straight from browser, file, terminal, API, or document text into durable memory. Read tools may
+return an evidence_receipt_id that is minted from the actual provider result. Capture external
+evidence from that receipt, using an exact excerpt when appropriate, then assemble a claim dossier,
+run the evidence gate, and promote only a PASS dossier. Never invent a receipt ID, source locator,
+or excerpt. HOLD means unresolved, not false. REJECT means the current evidence materially
+contradicts the claim. Preserve unknowns and do not launder external claims through source="agent".
 
-Do not expose hidden chain-of-thought. Report conclusions, evidence, completed operations,
-pending approvals, and future dependencies.
+Use event subscriptions and scheduled wakes only for concrete future dependencies. Avoid polling
+loops.
+
+Do not claim work is verified unless verification evidence shows a relevant successful check.
+Targeted checks prove only their actual scope. Do not expose hidden chain-of-thought. Report
+conclusions, evidence, completed operations, pending approvals, and future dependencies.
 """.strip()
 
 
@@ -68,6 +82,7 @@ class HomunculaRuntime:
         processes: BackgroundProcessManager,
         plans: PlanStore,
         skills: SkillStore,
+        review_enabled: bool = True,
     ):
         self.db = db
         self.computer = computer
@@ -81,6 +96,13 @@ class HomunculaRuntime:
         self.processes = processes
         self.plans = plans
         self.skills = skills
+        self.verification = VerificationStore(db)
+        self.evidence = EvidenceStore(db)
+        self.evidence_council = EvidenceCouncil(provider, self.evidence)
+        self.review_enabled = review_enabled
+        self.reviewer = PostTurnReviewer(provider, memory, skills, sentinel)
+        self._review_tasks: set[asyncio.Task[None]] = set()
+        self._review_by_thread: dict[str, asyncio.Task[None]] = {}
 
     def activity(
         self,
@@ -269,6 +291,22 @@ class HomunculaRuntime:
             *bundle.messages,
         ]
 
+        evidence = self.verification.summary(responsibility_id)
+        if evidence["total"]:
+            lines = []
+            for kind, row in evidence["latest_by_kind"].items():
+                command = " ".join(row["command"])
+                lines.append(
+                    f"{kind}: {row['status']} exit={row['returncode']} command={command}"
+                )
+            messages.insert(
+                1,
+                {
+                    "role": "system",
+                    "content": "Latest verification evidence:\n" + "\n".join(lines),
+                },
+            )
+
         if observation:
             messages.insert(
                 1,
@@ -283,6 +321,8 @@ class HomunculaRuntime:
 
         pending_actions: list[str] = []
         final_content = ""
+        loop_guard = ToolLoopGuard()
+        loop_blocks = 0
 
         for _ in range(20):
             response = await self.provider.chat(messages, TOOLS)
@@ -306,12 +346,45 @@ class HomunculaRuntime:
                 if isinstance(args, str):
                     args = json.loads(args)
 
-                result = await self._call_tool(
-                    name,
-                    args,
-                    responsibility_id=responsibility_id,
-                    observation=observation,
-                )
+                guard_decision = loop_guard.before(name, args)
+                if not guard_decision.allowed:
+                    loop_blocks += 1
+                    result = {
+                        "status": "blocked",
+                        "reason": "tool_loop_guard",
+                        "code": guard_decision.code,
+                        "message": guard_decision.message,
+                    }
+                    self.activity(
+                        "guardrail.blocked",
+                        guard_decision.message,
+                        responsibility_id=responsibility_id,
+                        metadata={"tool": name, "code": guard_decision.code},
+                    )
+                else:
+                    result = await self._call_tool(
+                        name,
+                        args,
+                        responsibility_id=responsibility_id,
+                        observation=observation,
+                    )
+                    after_decision = loop_guard.after(name, args, result)
+                    if not after_decision.allowed:
+                        loop_blocks += 1
+                        result = {
+                            **result,
+                            "guardrail": {
+                                "code": after_decision.code,
+                                "message": after_decision.message,
+                            },
+                        }
+                        self.activity(
+                            "guardrail.warning",
+                            after_decision.message,
+                            responsibility_id=responsibility_id,
+                            metadata={"tool": name, "code": after_decision.code},
+                        )
+
                 if result.get("status") == "approval_required":
                     pending_actions.append(result["action_id"])
 
@@ -330,10 +403,20 @@ class HomunculaRuntime:
                 )
                 break
 
+            if loop_blocks >= 2:
+                final_content = (
+                    response.content
+                    or "I stopped this turn because repeated tool calls were not making progress."
+                )
+                break
+
         if not final_content:
             final_content = "The local model completed the turn without additional text."
 
         self._store_message(thread_id, "assistant", final_content)
+        if self.review_enabled and responsibility_id is None and not observation:
+            self._schedule_review(thread_id)
+
         return {
             "content": final_content,
             "pending_actions": pending_actions,
@@ -345,6 +428,67 @@ class HomunculaRuntime:
                 "plan_id": bundle.plan_id,
             },
         }
+
+    def _schedule_review(self, thread_id: str) -> None:
+        previous = self._review_by_thread.get(thread_id)
+        if previous and not previous.done():
+            previous.cancel()
+
+        task = asyncio.create_task(
+            self._run_review(thread_id),
+            name=f"homuncula-review-{thread_id[:8]}",
+        )
+        self._review_tasks.add(task)
+        self._review_by_thread[thread_id] = task
+
+        def cleanup(done: asyncio.Task[None]) -> None:
+            self._review_tasks.discard(done)
+            if self._review_by_thread.get(thread_id) is done:
+                self._review_by_thread.pop(thread_id, None)
+
+        task.add_done_callback(cleanup)
+
+    async def _run_review(self, thread_id: str) -> None:
+        try:
+            await asyncio.sleep(2.0)
+            rows = self.db.all(
+                """
+                SELECT role, content
+                FROM messages
+                WHERE thread_id = ?
+                ORDER BY created_at DESC
+                LIMIT 12
+                """,
+                (thread_id,),
+            )
+            rows.reverse()
+            result = await self.reviewer.review(rows)
+            self.activity(
+                "review.completed",
+                (
+                    f"Post-turn review stored {result['memories_added']} memories "
+                    f"and proposed {len(result['skill_actions'])} skills"
+                ),
+                metadata=result,
+            )
+        except asyncio.CancelledError:
+            raise
+        except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
+            self.activity(
+                "review.failed",
+                str(exc),
+                metadata={"thread_id": thread_id},
+            )
+
+    async def shutdown(self) -> None:
+        tasks = list(self._review_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._review_tasks.clear()
+        self._review_by_thread.clear()
 
     def autonomy_paused(self) -> bool:
         return self.db.setting("runtime.paused", "0") == "1"
@@ -454,12 +598,149 @@ class HomunculaRuntime:
                 )
             }
 
+        if name == "evidence_capture":
+            try:
+                observation_item = self.evidence.capture_from_receipt(
+                    args["receipt_id"],
+                    excerpt=args.get("excerpt"),
+                    responsibility_id=responsibility_id,
+                )
+            except (KeyError, ValueError) as exc:
+                self.activity(
+                    "evidence.capture_blocked",
+                    str(exc),
+                    responsibility_id=responsibility_id,
+                    metadata={"receipt_id": args.get("receipt_id")},
+                )
+                return {
+                    "status": "blocked",
+                    "reason": "invalid_evidence_receipt",
+                    "message": str(exc),
+                }
+            self.activity(
+                "evidence.observed",
+                (
+                    "Captured verified evidence observation from "
+                    f"{observation_item['source']['kind']}"
+                ),
+                responsibility_id=responsibility_id,
+                metadata={
+                    "observation_id": observation_item["id"],
+                    "source_id": observation_item["source"]["id"],
+                    "receipt_ids": observation_item["receipt_ids"],
+                },
+            )
+            return observation_item
+
+        if name == "evidence_dossier":
+            dossier = self.evidence.create_dossier(
+                args["claim"],
+                args["observation_ids"],
+                responsibility_id=responsibility_id,
+                unknowns=args.get("unknowns"),
+            )
+            self.activity(
+                "evidence.dossier_created",
+                f"Created evidence dossier in HOLD: {dossier['claim'][:500]}",
+                responsibility_id=responsibility_id,
+                metadata={"dossier_id": dossier["id"]},
+            )
+            return dossier
+
+        if name == "evidence_review":
+            dossier = await self.evidence_council.review(args["dossier_id"])
+            self.activity(
+                "evidence.reviewed",
+                f"Evidence dossier resolved to {dossier['status'].upper()}",
+                responsibility_id=responsibility_id,
+                metadata={
+                    "dossier_id": dossier["id"],
+                    "status": dossier["status"],
+                    "confidence": dossier["confidence"],
+                    "review_round_id": dossier["review_round_id"],
+                },
+            )
+            return dossier
+
+        if name == "evidence_status":
+            return self.evidence.get_dossier(args["dossier_id"])
+
+        if name == "evidence_promote":
+            dossier = self.evidence.get_dossier(args["dossier_id"])
+            if dossier["status"] != "pass":
+                return {
+                    "status": "blocked",
+                    "reason": "evidence_gate_not_passed",
+                    "dossier_id": dossier["id"],
+                    "verdict": dossier["status"],
+                    "unknowns": dossier["unknowns"],
+                }
+            promoted_memory_id = dossier.get("promoted_memory_id")
+            if promoted_memory_id:
+                return {
+                    "status": "already_promoted",
+                    "dossier_id": dossier["id"],
+                    "memory": self.memory.get(promoted_memory_id),
+                }
+            kind = str(args.get("kind", "fact")).strip().lower()
+            if kind not in {"fact", "preference", "decision", "relationship", "commitment"}:
+                kind = "fact"
+            memory = self.memory.add(
+                dossier["claim"],
+                scope=args.get("scope", responsibility_id or "global"),
+                kind=kind,
+                source=f"evidence:{dossier['id']}",
+                confidence=float(dossier["confidence"]),
+                metadata={
+                    "responsibility_id": responsibility_id,
+                    "evidence_dossier_id": dossier["id"],
+                    "evidence_observation_ids": [
+                        item["id"] for item in dossier["observations"]
+                    ],
+                    "evidence_review_round_id": dossier["review_round_id"],
+                },
+            )
+            self.evidence.mark_promoted(dossier["id"], memory["id"])
+            self.activity(
+                "evidence.promoted",
+                "Promoted PASS evidence dossier to durable memory",
+                responsibility_id=responsibility_id,
+                metadata={
+                    "dossier_id": dossier["id"],
+                    "memory_id": memory["id"],
+                },
+            )
+            return {
+                "status": "promoted",
+                "dossier_id": dossier["id"],
+                "memory": memory,
+            }
+
         if name == "remember":
+            source = str(args.get("source", "agent")).strip().lower()
+            external_sources = {
+                "api",
+                "browser",
+                "document",
+                "external",
+                "file",
+                "git",
+                "terminal",
+                "web",
+            }
+            if source in external_sources:
+                return {
+                    "status": "blocked",
+                    "reason": "external_claim_requires_evidence_gate",
+                    "message": (
+                        "Capture the source as evidence and promote only after a PASS dossier."
+                    ),
+                }
             return self.memory.add(
                 args["content"],
                 scope=args.get("scope", responsibility_id or "global"),
                 kind=args.get("kind", "fact"),
-                source=args.get("source", "agent"),
+                source=source or "agent",
                 confidence=float(args.get("confidence", 1.0)),
                 metadata={"responsibility_id": responsibility_id},
             )
@@ -614,7 +895,11 @@ class HomunculaRuntime:
                 capability="process.read",
                 target=args["process_id"],
                 intent="Read background process status",
-                args={"op": "status", "process_id": args["process_id"]},
+                args={
+                    "op": "status",
+                    "process_id": args["process_id"],
+                    "responsibility_id": responsibility_id,
+                },
                 preview=f"Read process {args['process_id']}",
                 risk="read",
                 responsibility_id=responsibility_id,
@@ -642,7 +927,11 @@ class HomunculaRuntime:
                 capability="filesystem.read",
                 target=args["path"],
                 intent="Read workspace file",
-                args={"op": "read", "path": args["path"]},
+                args={
+                    "op": "read",
+                    "path": args["path"],
+                    "responsibility_id": responsibility_id,
+                },
                 preview=f"Read workspace file {args['path']}",
                 risk="read",
                 responsibility_id=responsibility_id,
@@ -676,6 +965,7 @@ class HomunculaRuntime:
                     "argv": argv,
                     "cwd": args.get("cwd", "."),
                     "timeout": int(args.get("timeout", 120)),
+                    "responsibility_id": responsibility_id,
                 },
                 preview="Run process: " + " ".join(argv),
                 risk="execute",
@@ -719,7 +1009,10 @@ class HomunculaRuntime:
                 capability="browser.read",
                 target="active-page",
                 intent="Read current browser page",
-                args={"op": "snapshot"},
+                args={
+                    "op": "snapshot",
+                    "responsibility_id": responsibility_id,
+                },
                 preview="Read current browser page",
                 risk="read",
                 responsibility_id=responsibility_id,
@@ -760,6 +1053,28 @@ class HomunculaRuntime:
                 },
                 preview=f"Upload workspace file {args['path']}",
                 risk="external-write",
+                responsibility_id=responsibility_id,
+                observation=observation,
+            )
+
+        if name == "browser_download":
+            directory = args.get("directory", "downloads")
+            max_mb = max(1, min(int(args.get("max_mb", 250)), 2048))
+            return await self._governed(
+                capability="browser.download",
+                target=directory,
+                intent=args["intent"],
+                args={
+                    "op": "download",
+                    "ref": args["ref"],
+                    "directory": directory,
+                    "max_mb": max_mb,
+                },
+                preview=(
+                    f"Download browser file into workspace/{directory} "
+                    f"(limit {max_mb} MB)"
+                ),
+                risk="local-write",
                 responsibility_id=responsibility_id,
                 observation=observation,
             )
@@ -910,6 +1225,12 @@ class HomunculaRuntime:
                     cwd=args.get("cwd", "."),
                     timeout=int(args.get("timeout", 120)),
                 )
+                evidence = self.verification.record_process(
+                    action_id=action_id,
+                    responsibility_id=args.get("responsibility_id"),
+                    result=result,
+                )
+                result = {**result, "verification_id": evidence["id"]}
             elif capability == "process.start":
                 result = await self.processes.start(
                     args["argv"],
@@ -938,6 +1259,22 @@ class HomunculaRuntime:
                     args["ref"],
                     self.computer.resolve_path(args["path"]),
                 )
+            elif capability == "browser.download":
+                directory = str(args.get("directory", "downloads"))
+                result = await self.browser.download(
+                    args["ref"],
+                    self.computer.resolve_path(directory),
+                    max_bytes=int(args.get("max_mb", 250)) * 1024 * 1024,
+                )
+                prefix = directory.rstrip("/\\")
+                result = {
+                    **result,
+                    "path": (
+                        f"{prefix}/{result['filename']}"
+                        if prefix and prefix != "."
+                        else result["filename"]
+                    ),
+                }
             elif capability == "windows.ui.read":
                 if args["op"] == "list":
                     result = {
@@ -965,6 +1302,18 @@ class HomunculaRuntime:
             else:
                 raise ValueError(f"No executor for capability {capability}")
 
+            receipt = self._record_evidence_read_receipt(
+                action_id=action_id,
+                capability=capability,
+                args=args,
+                result=result,
+            )
+            if receipt is not None:
+                result = {
+                    **result,
+                    "evidence_receipt_id": receipt["id"],
+                }
+
             self.sentinel.complete(action_id, result)
             self.activity(
                 "action.completed",
@@ -984,6 +1333,101 @@ class HomunculaRuntime:
                 metadata={"action_id": action_id, "capability": capability},
             )
             raise
+
+    def _record_evidence_read_receipt(
+        self,
+        *,
+        action_id: str,
+        capability: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        responsibility_id = args.get("responsibility_id")
+
+        if capability == "filesystem.read":
+            content = str(result.get("content") or "")
+            path = str(result.get("path") or args.get("path") or "").strip()
+            if not content or not path:
+                return None
+            return self.evidence.record_read_receipt(
+                action_id=action_id,
+                capability=capability,
+                source_kind="file",
+                locator=f"workspace://{path}",
+                title=path,
+                content=content,
+                responsibility_id=responsibility_id,
+                metadata={
+                    "truncated": bool(result.get("truncated")),
+                },
+            )
+
+        if capability == "browser.read":
+            content = str(result.get("text") or "")
+            url = str(result.get("url") or "").strip()
+            if not content or not url:
+                return None
+            return self.evidence.record_read_receipt(
+                action_id=action_id,
+                capability=capability,
+                source_kind="browser",
+                locator=url,
+                title=str(result.get("title") or ""),
+                content=content,
+                responsibility_id=responsibility_id,
+                metadata={
+                    "domain": result.get("domain"),
+                    "prompt_injection_risk": bool(
+                        result.get("prompt_injection_risk")
+                    ),
+                    "prompt_injection_signals": result.get(
+                        "prompt_injection_signals",
+                        [],
+                    ),
+                },
+            )
+
+        if capability == "process.read":
+            process_id = str(
+                result.get("id")
+                or result.get("process_id")
+                or args.get("process_id")
+                or ""
+            ).strip()
+            stdout = str(result.get("stdout") or "")
+            stderr = str(result.get("stderr") or "")
+            status = str(result.get("status") or "")
+            returncode = result.get("returncode")
+            content_parts = [
+                f"status: {status}" if status else "",
+                (
+                    f"returncode: {returncode}"
+                    if returncode is not None
+                    else ""
+                ),
+                f"stdout:\n{stdout}" if stdout else "",
+                f"stderr:\n{stderr}" if stderr else "",
+            ]
+            content = "\n\n".join(part for part in content_parts if part).strip()
+            if not process_id or not content:
+                return None
+            return self.evidence.record_read_receipt(
+                action_id=action_id,
+                capability=capability,
+                source_kind="process",
+                locator=f"process://{process_id}",
+                title=f"Background process {process_id}",
+                content=content,
+                responsibility_id=responsibility_id,
+                metadata={
+                    "argv": result.get("argv", []),
+                    "cwd": result.get("cwd"),
+                    "status": result.get("status"),
+                    "returncode": result.get("returncode"),
+                },
+            )
+
+        return None
 
     async def _execute_browser_interaction(
         self,
