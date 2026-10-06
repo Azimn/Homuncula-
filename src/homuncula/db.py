@@ -219,6 +219,71 @@ CREATE TABLE IF NOT EXISTS verification_events (
 );
 CREATE INDEX IF NOT EXISTS idx_verification_responsibility_time
 ON verification_events(responsibility_id, created_at);
+
+CREATE TABLE IF NOT EXISTS evidence_sources (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    locator TEXT NOT NULL,
+    title TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(kind, locator)
+);
+
+CREATE TABLE IF NOT EXISTS evidence_observations (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL REFERENCES evidence_sources(id) ON DELETE RESTRICT,
+    responsibility_id TEXT REFERENCES responsibilities(id) ON DELETE SET NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    UNIQUE(source_id, content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_observations_responsibility_time
+ON evidence_observations(responsibility_id, observed_at);
+
+CREATE TABLE IF NOT EXISTS evidence_dossiers (
+    id TEXT PRIMARY KEY,
+    responsibility_id TEXT REFERENCES responsibilities(id) ON DELETE SET NULL,
+    claim TEXT NOT NULL,
+    status TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    precheck_json TEXT NOT NULL,
+    unknowns_json TEXT NOT NULL,
+    review_round_id TEXT,
+    promoted_memory_id TEXT REFERENCES memories(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    reviewed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_dossiers_responsibility_status
+ON evidence_dossiers(responsibility_id, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS evidence_dossier_observations (
+    dossier_id TEXT NOT NULL REFERENCES evidence_dossiers(id) ON DELETE CASCADE,
+    observation_id TEXT NOT NULL REFERENCES evidence_observations(id) ON DELETE RESTRICT,
+    position INTEGER NOT NULL,
+    PRIMARY KEY(dossier_id, observation_id),
+    UNIQUE(dossier_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS evidence_reviews (
+    id TEXT PRIMARY KEY,
+    dossier_id TEXT NOT NULL REFERENCES evidence_dossiers(id) ON DELETE CASCADE,
+    round_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    reasons_json TEXT NOT NULL,
+    evidence_ids_json TEXT NOT NULL,
+    unknowns_json TEXT NOT NULL,
+    valid INTEGER NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_reviews_dossier_round
+ON evidence_reviews(dossier_id, round_id, created_at);
 """
 
 class Database:
