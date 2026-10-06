@@ -58,8 +58,8 @@ Keep reasons and unknowns concise.
 def parse_review_json(content: str) -> dict[str, Any]:
     text = content.strip()
     if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\\s*```$", "", text)
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
     data = json.loads(text)
     if not isinstance(data, dict):
         raise TypeError("Evidence review output must be a JSON object")
