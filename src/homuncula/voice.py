@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import bz2
 import io
 import math
 import os
@@ -40,22 +39,21 @@ class VoiceModelError(RuntimeError):
 def _safe_extract_tar_bz2(archive: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     resolved_destination = destination.resolve()
-    with bz2.open(archive, "rb") as compressed:
-        with tarfile.open(fileobj=compressed, mode="r:") as tar:
-            members = tar.getmembers()
-            for member in members:
-                target = (destination / member.name).resolve()
-                try:
-                    target.relative_to(resolved_destination)
-                except ValueError as exc:
-                    raise VoiceModelError(
-                        f"Voice model archive contains unsafe path: {member.name}"
-                    ) from exc
-                if member.issym() or member.islnk():
-                    raise VoiceModelError(
-                        f"Voice model archive contains unsupported link: {member.name}"
-                    )
-            tar.extractall(destination, members=members, filter="data")
+    with tarfile.open(archive, mode="r:bz2") as tar:
+        members = tar.getmembers()
+        for member in members:
+            target = (destination / member.name).resolve()
+            try:
+                target.relative_to(resolved_destination)
+            except ValueError as exc:
+                raise VoiceModelError(
+                    f"Voice model archive contains unsafe path: {member.name}"
+                ) from exc
+            if member.issym() or member.islnk():
+                raise VoiceModelError(
+                    f"Voice model archive contains unsupported link: {member.name}"
+                )
+        tar.extractall(destination, members=members, filter="data")
 
 
 def _wav_bytes(samples: Any, sample_rate: int) -> bytes:
@@ -167,12 +165,14 @@ class VoiceManager:
         with tempfile.TemporaryDirectory(dir=self.root) as raw_temp:
             temp = Path(raw_temp)
             archive = temp / "model.tar.bz2"
-            async with httpx.AsyncClient(timeout=None, follow_redirects=True) as client:
-                async with client.stream("GET", url) as response:
-                    response.raise_for_status()
-                    with archive.open("wb") as output:
-                        async for chunk in response.aiter_bytes(1024 * 1024):
-                            output.write(chunk)
+            async with (
+                httpx.AsyncClient(timeout=None, follow_redirects=True) as client,
+                client.stream("GET", url) as response,
+            ):
+                response.raise_for_status()
+                with archive.open("wb") as output:
+                    async for chunk in response.aiter_bytes(1024 * 1024):
+                        output.write(chunk)
 
             extracted = temp / "extracted"
             await asyncio.to_thread(_safe_extract_tar_bz2, archive, extracted)
