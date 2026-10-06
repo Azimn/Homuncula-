@@ -124,12 +124,12 @@ def terminate_pid_tree(
     pid: int,
     *,
     grace_seconds: float = 1.0,
-) -> None:
+) -> bool:
     """Best-effort termination for an isolated process group/tree."""
 
     if os.name == "nt":
         try:
-            subprocess.run(
+            completed = subprocess.run(
                 [
                     "taskkill",
                     "/PID",
@@ -144,18 +144,23 @@ def terminate_pid_tree(
                 env=sanitized_process_environment(),
             )
         except (OSError, subprocess.SubprocessError):
-            return
-        return
+            return False
+        return completed.returncode == 0
 
     try:
         os.killpg(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        return
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
     time.sleep(max(0.0, grace_seconds))
     try:
         os.killpg(pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        return
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return True
 
 
 def terminate_process_tree(
@@ -168,8 +173,11 @@ def terminate_process_tree(
     if process.poll() is not None:
         return
 
-    terminate_pid_tree(process.pid, grace_seconds=grace_seconds)
-    if process.poll() is None:
+    tree_terminated = terminate_pid_tree(
+        process.pid,
+        grace_seconds=grace_seconds,
+    )
+    if not tree_terminated and process.poll() is None:
         try:
             process.kill()
         except OSError:
