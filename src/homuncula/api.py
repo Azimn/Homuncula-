@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from .auth import token_matches
@@ -30,6 +30,7 @@ from .secrets_store import (
 )
 from .sentinel import Sentinel
 from .skills import SkillStore
+from .voice import VoiceManager, VoiceModelError, VoiceUnavailable
 from .windows_ui import WindowsUIProvider
 
 
@@ -87,6 +88,16 @@ class ModelRequest(BaseModel):
     model: str = Field(min_length=1, max_length=200)
 
 
+class VoiceInstallRequest(BaseModel):
+    component: str = Field(pattern="^(asr|tts)$")
+
+
+class VoiceSynthesisRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=12000)
+    speaker: int = Field(default=10, ge=0, le=10)
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -118,6 +129,7 @@ def create_app(
         in {"1", "true", "yes"},
     )
     windows_ui = windows_ui or WindowsUIProvider()
+    voice = VoiceManager(settings.home)
 
     runtime_holder: dict[str, HomunculaRuntime] = {}
 
@@ -209,6 +221,7 @@ def create_app(
     app.state.runtime = runtime
     app.state.events = event_hub
     app.state.secrets = secret_store
+    app.state.voice = voice
 
     @app.middleware("http")
     async def owner_auth(request: Request, call_next):
@@ -285,6 +298,42 @@ def create_app(
             return {"model": selected, "result": result}
         except (httpx.HTTPError, ValueError, ProviderError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/voice/status")
+    async def voice_status() -> dict[str, Any]:
+        return voice.status()
+
+    @app.post("/voice/install")
+    async def voice_install(request: VoiceInstallRequest) -> dict[str, Any]:
+        try:
+            return await voice.install(request.component)  # type: ignore[arg-type]
+        except (httpx.HTTPError, VoiceModelError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/voice/transcribe")
+    async def voice_transcribe(request: Request) -> dict[str, Any]:
+        raw = await request.body()
+        if not raw:
+            raise HTTPException(status_code=400, detail="WAV audio is required")
+        if len(raw) > 25 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Voice input is too large")
+        try:
+            return await asyncio.to_thread(voice.transcribe_wav, raw)
+        except (VoiceUnavailable, VoiceModelError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/voice/synthesize")
+    async def voice_synthesize(request: VoiceSynthesisRequest) -> Response:
+        try:
+            wav = await asyncio.to_thread(
+                voice.synthesize,
+                request.text,
+                speaker=request.speaker,
+                speed=request.speed,
+            )
+            return Response(content=wav, media_type="audio/wav")
+        except (VoiceUnavailable, VoiceModelError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/state")
     async def state() -> dict[str, Any]:
