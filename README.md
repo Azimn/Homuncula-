@@ -149,7 +149,11 @@ Local skills live under the Homuncula data directory and contain reusable instru
 
 ## Evidence and epistemic gating
 
-Homuncula separates externally observed information from durable belief. Browser text, documents, files, terminal output, APIs, and similar external sources can be captured as provenance-bearing observations with a source kind, exact redacted locator, timestamp, content hash, bounded metadata, and optional responsibility scope.
+Homuncula separates externally observed information from durable belief. File reads, browser snapshots, and process-status reads mint durable evidence receipts inside the governed execution path from the provider's actual returned data. Each receipt retains the read action, capability, exact redacted locator, bounded content, content hash, timestamp, metadata, and optional responsibility scope.
+
+Agent-created evidence observations must reference one of those receipts. The model may select an exact excerpt from receipt content, but it cannot supply its own source locator or substitute text that was not in the verified read result. A bogus receipt ID or non-matching excerpt fails closed without creating an observation.
+
+The authenticated owner API may still create manual observations directly. Those observations are explicitly distinguishable from receipt-backed observations and are not mislabeled as mechanically verified provenance.
 
 A claim is evaluated through an evidence dossier rather than written directly into durable memory. A dossier references one to twenty captured observations and begins in HOLD. HOLD means unresolved, not false.
 
@@ -166,7 +170,7 @@ Final PASS, HOLD, or REJECT is computed deterministically from stored reviewer r
 
 Only a PASS dossier can promote its exact reviewed claim into durable memory. The resulting memory stores the dossier ID, observation IDs, and review round, while the dossier stores the promoted memory ID. Repeated promotion returns the existing memory instead of creating a duplicate.
 
-The runtime exposes evidence capture, dossier creation, review, status, and promotion as internal tools. The authenticated local API exposes observation and dossier inspection plus explicit review. A dedicated desktop dossier browser is not yet implemented.
+The runtime exposes receipt-backed evidence capture, dossier creation, review, status, and promotion as internal tools. The authenticated local API exposes receipt, observation, and dossier inspection plus explicit review. Receipt listings are bounded previews; individual receipt lookup exposes the stored content for local inspection. A dedicated desktop dossier browser is not yet implemented.
 
 ## Browser
 
