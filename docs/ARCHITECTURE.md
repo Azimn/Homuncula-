@@ -84,6 +84,8 @@ Aggregation is deterministic and outside the model. A dossier passes only when V
 
 Only PASS dossiers can be promoted to durable memory. Promotion uses the exact reviewed claim, records the dossier and observation provenance in memory metadata, and links the dossier to the resulting memory so promotion is idempotent.
 
+The desktop exposes a read-oriented Evidence surface over these same durable records. It can filter dossiers by verdict, inspect unresolved unknowns, show observation provenance and source locators, distinguish receipt-backed observations from manual observations, display reviewer verdicts/reasons, inspect recent receipt previews, and explicitly request a new review round. The UI does not silently promote claims into memory.
+
 HOLD means unresolved. It is deliberately not treated as false. REJECT means the current evidence materially contradicts the claim. Neither state may be promoted through the evidence path.
 
 ## Context compiler
