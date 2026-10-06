@@ -150,9 +150,11 @@ def test_failed_migration_rolls_back_schema_and_ledger(tmp_path: Path) -> None:
         """,
     )
 
-    with db.connect() as conn:
-        with pytest.raises(DatabaseMigrationError, match="failed"):
-            db._apply_migration(conn, migration)
+    with db.connect() as conn, pytest.raises(
+        DatabaseMigrationError,
+        match="failed",
+    ):
+        db._apply_migration(conn, migration)
 
     assert db.one(
         """
@@ -165,3 +167,29 @@ def test_failed_migration_rolls_back_schema_and_ledger(tmp_path: Path) -> None:
         "SELECT version FROM schema_migrations WHERE version = ?",
         (migration.version,),
     ) is None
+
+
+def test_malformed_legacy_baseline_is_not_stamped_as_v02(tmp_path: Path) -> None:
+    path = tmp_path / "malformed-legacy.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL
+            )
+            """
+        )
+
+    db = Database(path)
+    with pytest.raises(
+        DatabaseMigrationError,
+        match="Baseline table threads is missing required columns",
+    ):
+        db.initialize()
+
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall()
+    assert rows == []
