@@ -160,6 +160,10 @@ External page text is untrusted. Common prompt-injection indicators are surfaced
 
 Browser mutations are separated into interaction, upload, and download capabilities so trust can be scoped precisely.
 
+## Git workspace inspection
+
+The desktop can inspect Git state through a dedicated read-only provider. It resolves the repository containing the configured workspace, scopes status and diff operations to that workspace, invokes Git with argv arrays and shell execution disabled, bounds diff output, and rejects paths that escape the workspace. This surface is intentionally observational. It exposes no commit, reset, checkout, merge, fetch, pull, push, or staging methods.
+
 ## Windows UI Automation
 
 Native Windows applications are inspected through UI Automation using pywinauto.
