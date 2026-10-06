@@ -597,27 +597,25 @@ class HomunculaRuntime:
             }
 
         if name == "evidence_capture":
-            observation = self.evidence.capture_observation(
-                source_kind=args["source_kind"],
-                source_locator=args["source_locator"],
-                source_title=args.get("source_title"),
-                content=args["content"],
+            observation_item = self.evidence.capture_from_receipt(
+                args["receipt_id"],
+                excerpt=args.get("excerpt"),
                 responsibility_id=responsibility_id,
-                metadata={
-                    "responsibility_id": responsibility_id,
-                    "captured_by": "model",
-                },
             )
             self.activity(
                 "evidence.observed",
-                f"Captured evidence observation from {observation['source']['kind']}",
+                (
+                    "Captured verified evidence observation from "
+                    f"{observation_item['source']['kind']}"
+                ),
                 responsibility_id=responsibility_id,
                 metadata={
-                    "observation_id": observation["id"],
-                    "source_id": observation["source"]["id"],
+                    "observation_id": observation_item["id"],
+                    "source_id": observation_item["source"]["id"],
+                    "receipt_ids": observation_item["receipt_ids"],
                 },
             )
-            return observation
+            return observation_item
 
         if name == "evidence_dossier":
             dossier = self.evidence.create_dossier(
@@ -882,7 +880,11 @@ class HomunculaRuntime:
                 capability="process.read",
                 target=args["process_id"],
                 intent="Read background process status",
-                args={"op": "status", "process_id": args["process_id"]},
+                args={
+                    "op": "status",
+                    "process_id": args["process_id"],
+                    "responsibility_id": responsibility_id,
+                },
                 preview=f"Read process {args['process_id']}",
                 risk="read",
                 responsibility_id=responsibility_id,
@@ -910,7 +912,11 @@ class HomunculaRuntime:
                 capability="filesystem.read",
                 target=args["path"],
                 intent="Read workspace file",
-                args={"op": "read", "path": args["path"]},
+                args={
+                    "op": "read",
+                    "path": args["path"],
+                    "responsibility_id": responsibility_id,
+                },
                 preview=f"Read workspace file {args['path']}",
                 risk="read",
                 responsibility_id=responsibility_id,
@@ -988,7 +994,10 @@ class HomunculaRuntime:
                 capability="browser.read",
                 target="active-page",
                 intent="Read current browser page",
-                args={"op": "snapshot"},
+                args={
+                    "op": "snapshot",
+                    "responsibility_id": responsibility_id,
+                },
                 preview="Read current browser page",
                 risk="read",
                 responsibility_id=responsibility_id,
@@ -1278,6 +1287,18 @@ class HomunculaRuntime:
             else:
                 raise ValueError(f"No executor for capability {capability}")
 
+            receipt = self._record_evidence_read_receipt(
+                action_id=action_id,
+                capability=capability,
+                args=args,
+                result=result,
+            )
+            if receipt is not None:
+                result = {
+                    **result,
+                    "evidence_receipt_id": receipt["id"],
+                }
+
             self.sentinel.complete(action_id, result)
             self.activity(
                 "action.completed",
@@ -1297,6 +1318,101 @@ class HomunculaRuntime:
                 metadata={"action_id": action_id, "capability": capability},
             )
             raise
+
+    def _record_evidence_read_receipt(
+        self,
+        *,
+        action_id: str,
+        capability: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        responsibility_id = args.get("responsibility_id")
+
+        if capability == "filesystem.read":
+            content = str(result.get("content") or "")
+            path = str(result.get("path") or args.get("path") or "").strip()
+            if not content or not path:
+                return None
+            return self.evidence.record_read_receipt(
+                action_id=action_id,
+                capability=capability,
+                source_kind="file",
+                locator=f"workspace://{path}",
+                title=path,
+                content=content,
+                responsibility_id=responsibility_id,
+                metadata={
+                    "truncated": bool(result.get("truncated")),
+                },
+            )
+
+        if capability == "browser.read":
+            content = str(result.get("text") or "")
+            url = str(result.get("url") or "").strip()
+            if not content or not url:
+                return None
+            return self.evidence.record_read_receipt(
+                action_id=action_id,
+                capability=capability,
+                source_kind="browser",
+                locator=url,
+                title=str(result.get("title") or ""),
+                content=content,
+                responsibility_id=responsibility_id,
+                metadata={
+                    "domain": result.get("domain"),
+                    "prompt_injection_risk": bool(
+                        result.get("prompt_injection_risk")
+                    ),
+                    "prompt_injection_signals": result.get(
+                        "prompt_injection_signals",
+                        [],
+                    ),
+                },
+            )
+
+        if capability == "process.read":
+            process_id = str(
+                result.get("id")
+                or result.get("process_id")
+                or args.get("process_id")
+                or ""
+            ).strip()
+            stdout = str(result.get("stdout") or "")
+            stderr = str(result.get("stderr") or "")
+            status = str(result.get("status") or "")
+            returncode = result.get("returncode")
+            content_parts = [
+                f"status: {status}" if status else "",
+                (
+                    f"returncode: {returncode}"
+                    if returncode is not None
+                    else ""
+                ),
+                f"stdout:\n{stdout}" if stdout else "",
+                f"stderr:\n{stderr}" if stderr else "",
+            ]
+            content = "\n\n".join(part for part in content_parts if part).strip()
+            if not process_id or not content:
+                return None
+            return self.evidence.record_read_receipt(
+                action_id=action_id,
+                capability=capability,
+                source_kind="process",
+                locator=f"process://{process_id}",
+                title=f"Background process {process_id}",
+                content=content,
+                responsibility_id=responsibility_id,
+                metadata={
+                    "argv": result.get("argv", []),
+                    "cwd": result.get("cwd"),
+                    "status": result.get("status"),
+                    "returncode": result.get("returncode"),
+                },
+            )
+
+        return None
 
     async def _execute_browser_interaction(
         self,
