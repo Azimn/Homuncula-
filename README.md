@@ -6,7 +6,7 @@ Homuncula is not a chat wrapper. Chat is one interface into a durable local runt
 
 ## Current status
 
-Homuncula v0.2 is an integrated working local agent rather than a design-only foundation.
+Homuncula v0.3 is the consolidated integrated local-agent line. It combines the production v0.2 foundation with fully local voice, epistemic evidence provenance and review, versioned database migrations, read-only Git Changes inspection, and the current resilience and desktop-control work.
 
 The repository contains a FastAPI agent runtime, SQLite system of record, authenticated Electron desktop, Ollama model provider, durable responsibilities and plans, persisted wake events, filesystem and Git event observation, background process events, hybrid lexical and semantic memory, memory revision history, provenance-preserving evidence dossiers, adversarial local evidence review, local reusable skills, bounded post-turn review, verification evidence, per-turn loop guardrails, native Windows UI Automation, a governed Playwright browser, workspace-scoped file and process tools, Windows DPAPI secret storage, native notifications, tray persistence, launch-at-login support, first-run Ollama and model setup, and a deterministic Sentinel approval boundary.
 
