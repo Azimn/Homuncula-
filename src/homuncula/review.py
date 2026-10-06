@@ -165,6 +165,11 @@ class PostTurnReviewer:
             return []
         actions: list[str] = []
         existing = {item["name"] for item in self.skills.list()}
+        pending_targets = {
+            str(row["target"])
+            for row in self.sentinel.pending()
+            if row["capability"] == "skill.install"
+        }
         for item in raw[:2]:
             if not isinstance(item, dict):
                 continue
@@ -178,7 +183,7 @@ class PostTurnReviewer:
                 normalized = self.skills.normalize_name(name)
             except ValueError:
                 continue
-            if normalized in existing:
+            if normalized in existing or normalized in pending_targets:
                 continue
             if not isinstance(allowed_tools, list):
                 allowed_tools = []
