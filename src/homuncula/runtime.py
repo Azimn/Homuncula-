@@ -14,6 +14,8 @@ from .computer import WindowsHostComputer
 from .context import ContextCompiler
 from .db import Database
 from .events import EventHub
+from .evidence import EvidenceStore
+from .evidence_review import EvidenceCouncil
 from .guardrails import ToolLoopGuard
 from .memory import MemoryStore
 from .plans import PlanStore
@@ -47,9 +49,15 @@ During proactive observation, investigate using read-only capabilities. You may 
 finding or propose an action, but do not silently perform mutations even when a standing grant
 would normally allow them.
 
-Use durable memory for facts, preferences, decisions, relationships, and commitments that are
-likely to matter later. Use event subscriptions and scheduled wakes only for concrete future
-dependencies. Avoid polling loops.
+Use durable memory for user-provided facts, preferences, decisions, relationships, and
+commitments that are likely to matter later. Externally derived factual claims should not jump
+straight from browser, file, terminal, API, or document text into durable memory. Capture the
+observation with provenance, assemble a claim dossier, run the evidence gate, and promote only a
+PASS dossier. HOLD means unresolved, not false. REJECT means the current evidence materially
+contradicts the claim. Preserve unknowns and do not launder external claims through source="agent".
+
+Use event subscriptions and scheduled wakes only for concrete future dependencies. Avoid polling
+loops.
 
 Do not claim work is verified unless verification evidence shows a relevant successful check.
 Targeted checks prove only their actual scope. Do not expose hidden chain-of-thought. Report
@@ -87,6 +95,8 @@ class HomunculaRuntime:
         self.plans = plans
         self.skills = skills
         self.verification = VerificationStore(db)
+        self.evidence = EvidenceStore(db)
+        self.evidence_council = EvidenceCouncil(provider, self.evidence)
         self.review_enabled = review_enabled
         self.reviewer = PostTurnReviewer(provider, memory, skills, sentinel)
         self._review_tasks: set[asyncio.Task[None]] = set()
@@ -586,12 +596,138 @@ class HomunculaRuntime:
                 )
             }
 
+        if name == "evidence_capture":
+            observation = self.evidence.capture_observation(
+                source_kind=args["source_kind"],
+                source_locator=args["source_locator"],
+                source_title=args.get("source_title"),
+                content=args["content"],
+                responsibility_id=responsibility_id,
+                metadata={
+                    "responsibility_id": responsibility_id,
+                    "captured_by": "model",
+                },
+            )
+            self.activity(
+                "evidence.observed",
+                f"Captured evidence observation from {observation['source']['kind']}",
+                responsibility_id=responsibility_id,
+                metadata={
+                    "observation_id": observation["id"],
+                    "source_id": observation["source"]["id"],
+                },
+            )
+            return observation
+
+        if name == "evidence_dossier":
+            dossier = self.evidence.create_dossier(
+                args["claim"],
+                args["observation_ids"],
+                responsibility_id=responsibility_id,
+                unknowns=args.get("unknowns"),
+            )
+            self.activity(
+                "evidence.dossier_created",
+                f"Created evidence dossier in HOLD: {dossier['claim'][:500]}",
+                responsibility_id=responsibility_id,
+                metadata={"dossier_id": dossier["id"]},
+            )
+            return dossier
+
+        if name == "evidence_review":
+            dossier = await self.evidence_council.review(args["dossier_id"])
+            self.activity(
+                "evidence.reviewed",
+                f"Evidence dossier resolved to {dossier['status'].upper()}",
+                responsibility_id=responsibility_id,
+                metadata={
+                    "dossier_id": dossier["id"],
+                    "status": dossier["status"],
+                    "confidence": dossier["confidence"],
+                    "review_round_id": dossier["review_round_id"],
+                },
+            )
+            return dossier
+
+        if name == "evidence_status":
+            return self.evidence.get_dossier(args["dossier_id"])
+
+        if name == "evidence_promote":
+            dossier = self.evidence.get_dossier(args["dossier_id"])
+            if dossier["status"] != "pass":
+                return {
+                    "status": "blocked",
+                    "reason": "evidence_gate_not_passed",
+                    "dossier_id": dossier["id"],
+                    "verdict": dossier["status"],
+                    "unknowns": dossier["unknowns"],
+                }
+            promoted_memory_id = dossier.get("promoted_memory_id")
+            if promoted_memory_id:
+                return {
+                    "status": "already_promoted",
+                    "dossier_id": dossier["id"],
+                    "memory": self.memory.get(promoted_memory_id),
+                }
+            kind = str(args.get("kind", "fact")).strip().lower()
+            if kind not in {"fact", "preference", "decision", "relationship", "commitment"}:
+                kind = "fact"
+            memory = self.memory.add(
+                dossier["claim"],
+                scope=args.get("scope", responsibility_id or "global"),
+                kind=kind,
+                source=f"evidence:{dossier['id']}",
+                confidence=float(dossier["confidence"]),
+                metadata={
+                    "responsibility_id": responsibility_id,
+                    "evidence_dossier_id": dossier["id"],
+                    "evidence_observation_ids": [
+                        item["id"] for item in dossier["observations"]
+                    ],
+                    "evidence_review_round_id": dossier["review_round_id"],
+                },
+            )
+            self.evidence.mark_promoted(dossier["id"], memory["id"])
+            self.activity(
+                "evidence.promoted",
+                f"Promoted PASS evidence dossier to durable memory",
+                responsibility_id=responsibility_id,
+                metadata={
+                    "dossier_id": dossier["id"],
+                    "memory_id": memory["id"],
+                },
+            )
+            return {
+                "status": "promoted",
+                "dossier_id": dossier["id"],
+                "memory": memory,
+            }
+
         if name == "remember":
+            source = str(args.get("source", "agent")).strip().lower()
+            external_sources = {
+                "api",
+                "browser",
+                "document",
+                "external",
+                "file",
+                "git",
+                "terminal",
+                "web",
+            }
+            if source in external_sources:
+                return {
+                    "status": "blocked",
+                    "reason": "external_claim_requires_evidence_gate",
+                    "message": (
+                        "Capture the source as evidence and promote only after a PASS dossier."
+                    ),
+                }
             return self.memory.add(
                 args["content"],
                 scope=args.get("scope", responsibility_id or "global"),
                 kind=args.get("kind", "fact"),
-                source=args.get("source", "agent"),
+                source=source or "agent",
                 confidence=float(args.get("confidence", 1.0)),
                 metadata={"responsibility_id": responsibility_id},
             )
