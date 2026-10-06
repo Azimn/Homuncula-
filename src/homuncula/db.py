@@ -254,6 +254,166 @@ BASELINE_VERSION = 1
 BASELINE_NAME = "v0.2-baseline"
 BASELINE_CHECKSUM = hashlib.sha256(BASE_SCHEMA.strip().encode("utf-8")).hexdigest()
 
+BASELINE_REQUIRED_COLUMNS = {
+    "settings": {"key", "value"},
+    "threads": {"id", "title", "created_at", "updated_at"},
+    "messages": {"id", "thread_id", "role", "content", "created_at"},
+    "responsibilities": {
+        "id",
+        "thread_id",
+        "title",
+        "objective",
+        "status",
+        "proactive_mode",
+        "created_at",
+        "updated_at",
+    },
+    "wakes": {
+        "id",
+        "responsibility_id",
+        "run_at",
+        "reason",
+        "payload_json",
+        "status",
+        "created_at",
+        "claimed_at",
+        "completed_at",
+        "error",
+    },
+    "memories": {
+        "id",
+        "scope",
+        "kind",
+        "content",
+        "source",
+        "confidence",
+        "metadata_json",
+        "created_at",
+        "last_used_at",
+    },
+    "memory_revisions": {
+        "id",
+        "memory_id",
+        "previous_content",
+        "previous_kind",
+        "previous_source",
+        "previous_confidence",
+        "reason",
+        "revised_at",
+    },
+    "memory_vectors": {
+        "memory_id",
+        "model",
+        "dimensions",
+        "vector_json",
+        "updated_at",
+    },
+    "plans": {
+        "id",
+        "responsibility_id",
+        "title",
+        "goal",
+        "status",
+        "current_step",
+        "created_at",
+        "updated_at",
+        "completed_at",
+    },
+    "plan_steps": {
+        "id",
+        "plan_id",
+        "position",
+        "title",
+        "detail",
+        "status",
+        "summary",
+        "started_at",
+        "completed_at",
+    },
+    "grants": {
+        "id",
+        "capability",
+        "resource_pattern",
+        "effect",
+        "expires_at",
+        "created_at",
+    },
+    "actions": {
+        "id",
+        "capability",
+        "target",
+        "intent",
+        "args_json",
+        "preview",
+        "risk",
+        "status",
+        "created_at",
+        "decided_at",
+        "completed_at",
+        "result_json",
+        "error",
+    },
+    "activities": {
+        "id",
+        "responsibility_id",
+        "kind",
+        "message",
+        "metadata_json",
+        "created_at",
+    },
+    "event_subscriptions": {
+        "id",
+        "responsibility_id",
+        "source",
+        "pattern",
+        "enabled",
+        "created_at",
+    },
+    "event_receipts": {
+        "event_key",
+        "source",
+        "event_type",
+        "payload_json",
+        "created_at",
+    },
+    "findings": {
+        "id",
+        "responsibility_id",
+        "title",
+        "summary",
+        "evidence_json",
+        "status",
+        "created_at",
+        "updated_at",
+    },
+    "background_processes": {
+        "id",
+        "responsibility_id",
+        "argv_json",
+        "cwd",
+        "status",
+        "pid",
+        "returncode",
+        "stdout",
+        "stderr",
+        "started_at",
+        "completed_at",
+    },
+    "verification_events": {
+        "id",
+        "action_id",
+        "responsibility_id",
+        "kind",
+        "command_json",
+        "cwd",
+        "status",
+        "returncode",
+        "stdout_summary",
+        "stderr_summary",
+        "created_at",
+    },
+}
+
 EVIDENCE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS evidence_sources (
     id TEXT PRIMARY KEY,
@@ -410,10 +570,22 @@ class Database:
                 self._validate_migration_ledger(conn)
 
             conn.executescript(BASE_SCHEMA)
+            self._validate_baseline_schema(conn)
             self._ensure_migration_baseline(conn)
             self._validate_migration_ledger(conn)
             self._apply_pending_migrations(conn)
             self._initialize_fts(conn)
+
+    def _validate_baseline_schema(self, conn: sqlite3.Connection) -> None:
+        for table, required_columns in BASELINE_REQUIRED_COLUMNS.items():
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            actual_columns = {str(row["name"]) for row in rows}
+            missing = sorted(required_columns - actual_columns)
+            if missing:
+                raise DatabaseMigrationError(
+                    f"Baseline table {table} is missing required columns: "
+                    + ", ".join(missing)
+                )
 
     def _ensure_migration_baseline(self, conn: sqlite3.Connection) -> None:
         row = conn.execute(
