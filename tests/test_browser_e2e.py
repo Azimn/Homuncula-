@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from homuncula.browser import BrowserProvider
+from homuncula.browser import BrowserNavigationError, BrowserProvider, validate_navigation_url
 
 HTML = b"""<!doctype html>
 <html>
@@ -62,3 +62,17 @@ async def test_real_playwright_semantic_browser(tmp_path: Path) -> None:
         server.shutdown()
         with contextlib.suppress(Exception):
             server.server_close()
+
+
+def test_browser_navigation_rejects_non_web_schemes() -> None:
+    assert validate_navigation_url("https://example.com/path") == "https://example.com/path"
+    for candidate in (
+        "file:///C:/Windows/System32/drivers/etc/hosts",
+        "javascript:alert(1)",
+        "chrome://settings",
+        "data:text/plain,secret",
+        "https://user:pass@example.com/",
+        "https:///missing-host",
+    ):
+        with pytest.raises(BrowserNavigationError):
+            validate_navigation_url(candidate)
