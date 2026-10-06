@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from .auth import redact_payload
 from .db import Database
 
 
@@ -21,28 +22,49 @@ class Decision:
 
 
 class Sentinel:
-    INTERNAL_ALLOW = frozenset({
-        "memory.search",
-        "memory.remember",
-        "runtime.schedule_wake",
-        "responsibility.read",
-    })
+    INTERNAL_ALLOW = frozenset(
+        {
+            "memory.search",
+            "memory.remember",
+            "memory.revise",
+            "runtime.schedule_wake",
+            "runtime.subscribe_event",
+            "responsibility.read",
+            "finding.create",
+            "plan.create",
+            "plan.read",
+            "plan.advance",
+            "plan.block",
+            "plan.resume",
+            "plan.fail",
+            "skill.list",
+            "skill.read",
+        }
+    )
 
-    READ_ALLOW = frozenset({
-        "filesystem.list",
-        "filesystem.read",
-    })
+    READ_ALLOW = frozenset(
+        {
+            "filesystem.list",
+            "filesystem.read",
+            "browser.navigate",
+            "browser.read",
+            "windows.ui.read",
+            "process.read",
+        }
+    )
 
-    KNOWN_CAPABILITIES = INTERNAL_ALLOW | READ_ALLOW | frozenset({
-        "filesystem.write",
-        "process.exec",
-        "browser.navigate",
-        "browser.interact",
-        "windows.ui.read",
-        "windows.ui.interact",
-        "network.http",
-        "skill.install",
-    })
+    KNOWN_CAPABILITIES = INTERNAL_ALLOW | READ_ALLOW | frozenset(
+        {
+            "filesystem.write",
+            "process.exec",
+            "process.start",
+            "browser.interact",
+            "browser.upload",
+            "windows.ui.interact",
+            "network.http",
+            "skill.install",
+        }
+    )
 
     def __init__(self, db: Database):
         self.db = db
@@ -56,6 +78,7 @@ class Sentinel:
         args: dict,
         preview: str,
         risk: str,
+        force_approval: bool = False,
     ) -> Decision:
         action_id = uuid.uuid4().hex
         created_at = now_iso()
@@ -63,6 +86,13 @@ class Sentinel:
         if capability not in self.KNOWN_CAPABILITIES:
             status = "denied"
             reason = "unknown capability"
+        elif (
+            force_approval
+            and capability not in self.INTERNAL_ALLOW
+            and capability not in self.READ_ALLOW
+        ):
+            status = "pending"
+            reason = "observation mode requires explicit approval"
         elif capability in self.INTERNAL_ALLOW or capability in self.READ_ALLOW:
             status = "approved"
             reason = "default local policy"
@@ -73,6 +103,7 @@ class Sentinel:
             status = "pending"
             reason = "user approval required"
 
+        safe_args = redact_payload(args)
         self.db.execute(
             """
             INSERT INTO actions
@@ -84,7 +115,7 @@ class Sentinel:
                 capability,
                 target,
                 intent,
-                self.db.json(args),
+                self.db.json(safe_args),
                 preview,
                 risk,
                 status,
@@ -130,7 +161,11 @@ class Sentinel:
             SET status = 'completed', completed_at = ?, result_json = ?
             WHERE id = ?
             """,
-            (now_iso(), self.db.json(result), action_id),
+            (
+                now_iso(),
+                self.db.json(redact_payload(result)),
+                action_id,
+            ),
         )
         return self.get(action_id)
 
@@ -141,7 +176,7 @@ class Sentinel:
             SET status = 'failed', completed_at = ?, error = ?
             WHERE id = ?
             """,
-            (now_iso(), error, action_id),
+            (now_iso(), error[:4000], action_id),
         )
         return self.get(action_id)
 
@@ -156,6 +191,11 @@ class Sentinel:
             "SELECT * FROM actions WHERE status = 'pending' ORDER BY created_at ASC"
         )
 
+    def list_grants(self) -> list[dict]:
+        return self.db.all(
+            "SELECT * FROM grants ORDER BY created_at DESC"
+        )
+
     def add_grant(
         self,
         capability: str,
@@ -163,6 +203,8 @@ class Sentinel:
         *,
         expires_at: str | None = None,
     ) -> dict:
+        if capability not in self.KNOWN_CAPABILITIES:
+            raise ValueError(f"Unknown capability: {capability}")
         grant_id = uuid.uuid4().hex
         self.db.execute(
             """
@@ -176,6 +218,9 @@ class Sentinel:
         if not row:
             raise RuntimeError("Grant insert failed")
         return row
+
+    def revoke_grant(self, grant_id: str) -> None:
+        self.db.execute("DELETE FROM grants WHERE id = ?", (grant_id,))
 
     def _matches_grant(self, capability: str, target: str) -> bool:
         rows = self.db.all(

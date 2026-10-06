@@ -24,40 +24,74 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install
         run: python -m pip install -e ".[dev]"
-
       - name: Ruff
         run: python -m ruff check src tests
-
       - name: Tests
-        run: python -m pytest -q
+        run: python -m pytest -q -m "not browser"
+
+  browser:
+    name: Real Playwright browser test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Browser integration
+        run: python -m pytest -q -m browser
 
   desktop:
     name: Desktop typecheck and build
     runs-on: windows-latest
-
     defaults:
       run:
         working-directory: desktop
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-
       - name: Install
         run: npm install
-
       - name: Typecheck
         run: npm run typecheck
-
       - name: Build
         run: npm run build
+
+  package-windows:
+    name: Windows packaged application
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Python package tools
+        run: python -m pip install -e ".[package]"
+      - name: Freeze agentd
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path desktop/resources | Out-Null
+          python -m PyInstaller --noconfirm --clean --onefile --name agentd --distpath desktop/resources --workpath build/pyinstaller --specpath build --collect-all playwright --collect-all pywinauto agentd_entry.py
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm install
+      - name: Build NSIS installer
+        working-directory: desktop
+        run: npm run dist:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Homuncula-Windows
+          path: desktop/release/*.exe

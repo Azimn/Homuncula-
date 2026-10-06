@@ -70,6 +70,56 @@ CREATE TABLE IF NOT EXISTS memories (
 CREATE INDEX IF NOT EXISTS idx_memories_scope
 ON memories(scope, kind, created_at);
 
+CREATE TABLE IF NOT EXISTS memory_revisions (
+    id TEXT PRIMARY KEY,
+    memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    previous_content TEXT NOT NULL,
+    previous_kind TEXT NOT NULL,
+    previous_source TEXT NOT NULL,
+    previous_confidence REAL NOT NULL,
+    reason TEXT NOT NULL,
+    revised_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_revisions_memory
+ON memory_revisions(memory_id, revised_at);
+
+CREATE TABLE IF NOT EXISTS memory_vectors (
+    memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    vector_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS plans (
+    id TEXT PRIMARY KEY,
+    responsibility_id TEXT NOT NULL REFERENCES responsibilities(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL,
+    current_step INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_plans_responsibility_status
+ON plans(responsibility_id, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS plan_steps (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    status TEXT NOT NULL,
+    summary TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    UNIQUE(plan_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_plan_steps_plan
+ON plan_steps(plan_id, position);
+
 CREATE TABLE IF NOT EXISTS grants (
     id TEXT PRIMARY KEY,
     capability TEXT NOT NULL,
@@ -107,8 +157,53 @@ CREATE TABLE IF NOT EXISTS activities (
 );
 CREATE INDEX IF NOT EXISTS idx_activities_time
 ON activities(created_at);
-"""
 
+CREATE TABLE IF NOT EXISTS event_subscriptions (
+    id TEXT PRIMARY KEY,
+    responsibility_id TEXT NOT NULL REFERENCES responsibilities(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_subscriptions_source
+ON event_subscriptions(source, enabled);
+
+CREATE TABLE IF NOT EXISTS event_receipts (
+    event_key TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS findings (
+    id TEXT PRIMARY KEY,
+    responsibility_id TEXT REFERENCES responsibilities(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_findings_status_time
+ON findings(status, created_at);
+
+CREATE TABLE IF NOT EXISTS background_processes (
+    id TEXT PRIMARY KEY,
+    responsibility_id TEXT,
+    argv_json TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    status TEXT NOT NULL,
+    pid INTEGER,
+    returncode INTEGER,
+    stdout TEXT,
+    stderr TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT
+);
+"""
 
 class Database:
     def __init__(self, path: Path):
@@ -150,11 +245,23 @@ class Database:
                     END;
                     """
                 )
+                conn.execute(
+                    """
+                    INSERT INTO memory_fts(rowid, content, source)
+                    SELECT m.rowid, m.content, m.source
+                    FROM memories m
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM memory_fts f WHERE f.rowid = m.rowid
+                    )
+                    """
+                )
             except sqlite3.OperationalError:
                 pass
 
     @contextmanager
-    def transaction(self) -> collections.abc.Generator[sqlite3.Connection, None, None]:
+    def transaction(
+        self,
+    ) -> collections.abc.Generator[sqlite3.Connection, None, None]:
         conn = self.connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -179,6 +286,19 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
+
+    def setting(self, key: str, default: str | None = None) -> str | None:
+        row = self.one("SELECT value FROM settings WHERE key = ?", (key,))
+        return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        self.execute(
+            """
+            INSERT INTO settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
 
     @staticmethod
     def json(value: Any) -> str:
