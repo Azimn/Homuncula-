@@ -886,7 +886,11 @@ class HomunculaRuntime:
                 ),
             }
 
-        governed_args = dict(args)
+        governed_args = {
+            key: value
+            for key, value in args.items()
+            if not str(key).startswith("_")
+        }
         if responsibility_id:
             governed_args["_responsibility_id"] = responsibility_id
 
