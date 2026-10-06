@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -175,9 +176,4 @@ class SkillStore:
         skill_dir = self._skill_dir(name)
         if not skill_dir.exists():
             raise KeyError(name)
-        for path in sorted(skill_dir.rglob("*"), reverse=True):
-            if path.is_file() or path.is_symlink():
-                path.unlink()
-            elif path.is_dir():
-                path.rmdir()
-        skill_dir.rmdir()
+        shutil.rmtree(skill_dir)
