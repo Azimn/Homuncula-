@@ -5,6 +5,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -19,7 +20,7 @@ from .events import EventHub, WorkspaceEventSource
 from .memory import MemoryStore
 from .plans import PlanStore
 from .processes import BackgroundProcessManager
-from .provider import OllamaProvider
+from .provider import OllamaProvider, ProviderError
 from .runtime import HomunculaRuntime, WakeScheduler
 from .secrets_store import (
     MemorySecretStore,
@@ -253,7 +254,7 @@ def create_app(
                 "selected": provider.model,
                 "available": available,
             }
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, ProviderError) as exc:
             return {
                 "ok": False,
                 "selected": provider.model,
@@ -272,7 +273,7 @@ def create_app(
             return {"model": selected}
         except HTTPException:
             raise
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, ProviderError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.post("/models/pull")
@@ -282,7 +283,7 @@ def create_app(
             selected = provider.select_model(request.model)
             db.set_setting("runtime.model", selected)
             return {"model": selected, "result": result}
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, ProviderError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/state")
@@ -334,7 +335,7 @@ def create_app(
             return await runtime.chat(thread_id, request.content)
         except KeyError:
             raise HTTPException(status_code=404, detail="Thread not found") from None
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, ProviderError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.post("/responsibilities")
