@@ -172,6 +172,16 @@ Only a PASS dossier can promote its exact reviewed claim into durable memory. Th
 
 The runtime exposes receipt-backed evidence capture, dossier creation, review, status, and promotion as internal tools. The authenticated local API exposes receipt, observation, and dossier inspection plus explicit review. Receipt listings are bounded previews; individual receipt lookup exposes the stored content for local inspection. A dedicated desktop dossier browser is not yet implemented.
 
+## Database schema upgrades
+
+SQLite schema evolution is versioned rather than relying only on additive startup DDL. Existing v0.2 databases are registered as schema version 1, and the evidence subsystem is migration 2.
+
+Every migration has an ordered integer version, stable name, and SHA-256 checksum. Startup validates the code-side migration registry and the durable database ledger before applying pending work. Migrations run inside an immediate SQLite transaction and record their ledger entry only after all statements succeed.
+
+A failed migration rolls back its schema changes. A tampered migration checksum, missing ledger version, unknown migration, or database created by a newer Homuncula build stops startup instead of silently guessing how to interpret durable state. Existing durable memories, threads, responsibilities, permissions, and other v0.2 data are preserved during the tested upgrade path.
+
+The authenticated health response exposes the current and target schema versions plus the applied migration ledger for local inspection.
+
 ## Browser
 
 The browser provider uses Playwright with a local persistent profile and semantic page representations. It exposes text, ARIA structure, and stable referenced controls before any visual fallback is considered.
@@ -238,7 +248,7 @@ The implementation deliberately avoids inheriting the Hermes fork's multi-agent 
 
 ## Known remaining work
 
-The current system is usable as a local persistent agent foundation and desktop product, but several production layers remain intentionally open. Visual computer-use fallback, higher-quality optional local embeddings, a dedicated desktop evidence-dossier browser, fully local voice input and output, stronger Windows sandboxing for generated code, connector-specific integrations, production code signing, database migration tooling beyond additive schema initialization, and broader release hardening remain future work.
+The current system is usable as a local persistent agent foundation and desktop product, but several production layers remain intentionally open. Visual computer-use fallback, higher-quality optional local embeddings, a dedicated desktop evidence-dossier browser, fully local voice input and output, stronger Windows sandboxing for generated code, connector-specific integrations, production code signing, and broader release hardening remain future work.
 
 Those layers are expected to preserve the same contracts: durable state outside the model, local-first operation, explicit authority, inspectable provenance, and no hidden cloud dependency.
 
