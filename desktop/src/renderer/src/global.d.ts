@@ -44,6 +44,9 @@ declare global {
       revokeGrant: (id: string) => Promise<any>;
       processes: () => Promise<any[]>;
       subscriptions: () => Promise<any[]>;
+      plans: () => Promise<any[]>;
+      skills: () => Promise<any[]>;
+      verification: () => Promise<any[]>;
       computerStatus: () => Promise<any>;
       windows: () => Promise<any>;
     };
