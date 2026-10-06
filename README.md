@@ -170,7 +170,9 @@ Final PASS, HOLD, or REJECT is computed deterministically from stored reviewer r
 
 Only a PASS dossier can promote its exact reviewed claim into durable memory. The resulting memory stores the dossier ID, observation IDs, and review round, while the dossier stores the promoted memory ID. Repeated promotion returns the existing memory instead of creating a duplicate.
 
-The runtime exposes receipt-backed evidence capture, dossier creation, review, status, and promotion as internal tools. The authenticated local API exposes receipt, observation, and dossier inspection plus explicit review. Receipt listings are bounded previews; individual receipt lookup exposes the stored content for local inspection. A dedicated desktop dossier browser is not yet implemented.
+The runtime exposes receipt-backed evidence capture, dossier creation, review, status, and promotion as internal tools. The authenticated local API exposes receipt, observation, and dossier inspection plus explicit review. Receipt listings are bounded previews; individual receipt lookup exposes the stored content for local inspection.
+
+The desktop Evidence view makes that provenance chain inspectable without raw API calls. It shows dossier PASS/HOLD/REJECT state, confidence, unresolved unknowns, promotion state, source observations, verified-receipt versus manual provenance, recent read receipts, and each reviewer role's verdict and reasons. Rerunning a dossier review is an explicit owner action.
 
 ## Database schema upgrades
 
@@ -224,7 +226,7 @@ Credentials are stored behind opaque references. On Windows, protected secrets u
 
 ## Desktop surfaces
 
-The desktop exposes conversation, responsibilities, approvals, findings, memory, durable plans, local skills, verification evidence, read-only Git workspace changes, host status, background processes, Windows application inventory, activity provenance, model setup, permissions, autonomy takeover, host restart, launch-at-login, and tray presence.
+The desktop exposes conversation, responsibilities, approvals, findings, evidence dossiers and source receipts, memory, durable plans, local skills, verification evidence, read-only Git workspace changes, host status, background processes, Windows application inventory, activity provenance, model setup, permissions, autonomy takeover, host restart, launch-at-login, and tray presence.
 
 Closing the main window hides Homuncula to the tray instead of terminating its local responsibilities.
 
@@ -250,7 +252,7 @@ The implementation deliberately avoids inheriting the Hermes fork's multi-agent 
 
 ## Known remaining work
 
-The current system is usable as a local persistent agent foundation and desktop product, but several production layers remain intentionally open. Visual computer-use fallback, higher-quality optional local embeddings, a dedicated desktop evidence-dossier browser, fully local voice input and output, stronger Windows sandboxing for generated code, connector-specific integrations, production code signing, and broader release hardening remain future work.
+The current system is usable as a local persistent agent foundation and desktop product, but several production layers remain intentionally open. Visual computer-use fallback, higher-quality optional local embeddings, stronger Windows sandboxing for generated code, connector-specific integrations, production code signing, and broader release hardening remain future work.
 
 Those layers are expected to preserve the same contracts: durable state outside the model, local-first operation, explicit authority, inspectable provenance, and no hidden cloud dependency.
 
