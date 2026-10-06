@@ -9,7 +9,6 @@ from typing import Any
 from .auth import redact_payload, redact_text
 from .db import Database
 
-
 REVIEW_ROLES = ("scout", "verifier", "skeptic", "integrator")
 VALID_VERDICTS = {"pass", "hold", "reject"}
 
