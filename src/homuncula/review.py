@@ -53,7 +53,7 @@ def prune_conversation(
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
             continue
-        compact = re.sub(r"\\s+", " ", content).strip()
+        compact = re.sub(r"\s+", " ", content).strip()
         lines.append(f"{role.upper()}: {compact[:1600]}")
 
     selected: list[str] = []
@@ -71,8 +71,8 @@ def prune_conversation(
 def parse_review_json(content: str) -> dict[str, Any]:
     text = content.strip()
     if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\\s*```$", "", text)
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
     data = json.loads(text)
     if not isinstance(data, dict):
         raise TypeError("Review output must be a JSON object")
