@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-type View = "home" | "memory" | "findings" | "permissions" | "computer" | "activity";
+type View = "home" | "work" | "memory" | "findings" | "permissions" | "computer" | "activity";
 
 type Health = {
   ok: boolean;
@@ -100,6 +100,47 @@ type WindowRecord = {
   class_name?: string | null;
 };
 
+type PlanStep = {
+  id: string;
+  position: number;
+  title: string;
+  detail: string;
+  status: string;
+  summary?: string | null;
+};
+
+type Plan = {
+  id: string;
+  responsibility_id: string;
+  title: string;
+  goal: string;
+  status: string;
+  current_step?: number | null;
+  updated_at: string;
+  steps: PlanStep[];
+};
+
+type Skill = {
+  name: string;
+  description: string;
+  instructions: string;
+  allowed_tools: string[];
+  source: string;
+};
+
+type Verification = {
+  id: string;
+  responsibility_id?: string | null;
+  kind: string;
+  command: string[];
+  cwd: string;
+  status: string;
+  returncode: number;
+  stdout_summary: string;
+  stderr_summary: string;
+  created_at: string;
+};
+
 type ChatLine = {
   role: "user" | "assistant" | "system";
   content: string;
@@ -110,6 +151,11 @@ const VIEW_COPY: Record<View, { eyebrow: string; title: string; subtitle: string
     eyebrow: "Persistent local intelligence",
     title: "Stay responsible, not merely responsive.",
     subtitle: "Conversation, active responsibilities, and decisions that need you."
+  },
+  work: {
+    eyebrow: "Durable execution",
+    title: "Plans, skills, and proof of work.",
+    subtitle: "See what the agent intends to do, what reusable procedures it knows, and what checks actually passed."
   },
   memory: {
     eyebrow: "Inspectable memory",
@@ -160,6 +206,9 @@ function App() {
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [grants, setGrants] = useState<Grant[]>([]);
   const [processes, setProcesses] = useState<ProcessRecord[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [verification, setVerification] = useState<Verification[]>([]);
   const [windows, setWindows] = useState<WindowRecord[]>([]);
   const [computer, setComputer] = useState<any>(null);
 
@@ -196,7 +245,10 @@ function App() {
         nextFindings,
         nextMemories,
         nextGrants,
-        nextProcesses
+        nextProcesses,
+        nextPlans,
+        nextSkills,
+        nextVerification
       ] = await Promise.all([
         window.homuncula.health(),
         window.homuncula.state(),
@@ -206,7 +258,10 @@ function App() {
         window.homuncula.findings(),
         window.homuncula.memory(),
         window.homuncula.grants(),
-        window.homuncula.processes()
+        window.homuncula.processes(),
+        window.homuncula.plans(),
+        window.homuncula.skills(),
+        window.homuncula.verification()
       ]);
 
       setHealth(nextHealth as Health);
@@ -218,6 +273,9 @@ function App() {
       setMemories(nextMemories as MemoryRecord[]);
       setGrants(nextGrants as Grant[]);
       setProcesses(nextProcesses as ProcessRecord[]);
+      setPlans(nextPlans as Plan[]);
+      setSkills(nextSkills as Skill[]);
+      setVerification(nextVerification as Verification[]);
       setBackendReady(true);
       setError(null);
     } catch (cause) {
@@ -459,6 +517,7 @@ function App() {
           {(
             [
               ["home", "Home"],
+              ["work", "Work"],
               ["memory", "Memory"],
               ["findings", "Findings"],
               ["permissions", "Permissions"],
@@ -652,6 +711,97 @@ function App() {
               </div>
             </section>
           </>
+        )}
+
+
+        {view === "work" && (
+          <section className="computer-layout">
+            <div className="card span-two">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Execution state</span>
+                  <h2>Durable plans</h2>
+                </div>
+                <span className="count">{plans.length}</span>
+              </div>
+              <div className="compact-list">
+                {plans.length === 0 && (
+                  <div className="empty">
+                    Plans appear when a persistent responsibility prepares mutating work.
+                  </div>
+                )}
+                {plans.map((plan) => (
+                  <div className="approval" key={plan.id}>
+                    <div>
+                      <strong>{plan.title}</strong>
+                      <p>{plan.goal}</p>
+                      <span>{plan.status} · {plan.steps.filter((step) => step.status === "complete").length}/{plan.steps.length} complete</span>
+                    </div>
+                    <div className="compact-list">
+                      {plan.steps.map((step) => (
+                        <div className="grant-row" key={step.id}>
+                          <div>
+                            <strong>{step.position}. {step.title}</strong>
+                            <span>{step.status}{step.summary ? " · " + step.summary : ""}</span>
+                          </div>
+                          <span className={"badge " + step.status}>{step.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Reusable procedures</span>
+                  <h2>Local skills</h2>
+                </div>
+                <span className="count">{skills.length}</span>
+              </div>
+              <div className="compact-list">
+                {skills.length === 0 && (
+                  <div className="empty">No local skills have been installed yet.</div>
+                )}
+                {skills.map((skill) => (
+                  <div className="grant-row" key={skill.name}>
+                    <div>
+                      <strong>{skill.name}</strong>
+                      <span>{skill.description}</span>
+                      <span>{skill.allowed_tools.length ? skill.allowed_tools.join(", ") : "No declared tool guidance"}</span>
+                    </div>
+                    <span className="badge">{skill.source}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Verification ledger</span>
+                  <h2>Latest evidence</h2>
+                </div>
+                <span className="count">{verification.length}</span>
+              </div>
+              <div className="compact-list">
+                {verification.length === 0 && (
+                  <div className="empty">No test, quality, build, or inspection evidence has been recorded.</div>
+                )}
+                {verification.slice(0, 20).map((item) => (
+                  <div className="grant-row" key={item.id}>
+                    <div>
+                      <strong>{item.kind} · {item.command.join(" ")}</strong>
+                      <span>{item.cwd} · exit {item.returncode} · {relativeTime(item.created_at)}</span>
+                    </div>
+                    <span className={"badge " + item.status}>{item.status}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
         )}
 
         {view === "memory" && (
