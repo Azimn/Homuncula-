@@ -21,6 +21,10 @@ class BrowserReferenceError(LookupError):
 class BrowserNavigationError(ValueError):
     pass
 
+
+class BrowserDownloadError(RuntimeError):
+    pass
+
 def validate_navigation_url(url: str) -> str:
     candidate = url.strip()
     parsed = urlparse(candidate)
@@ -170,6 +174,8 @@ class BrowserProvider:
         self,
         reference: str,
         destination_dir: Path,
+        *,
+        max_bytes: int = 250 * 1024 * 1024,
     ) -> dict[str, Any]:
         locator = await self._locator(reference)
         destination_dir = Path(destination_dir)
@@ -193,10 +199,16 @@ class BrowserProvider:
             counter += 1
 
         await download.save_as(str(target))
+        size = target.stat().st_size
+        if size > max(1, max_bytes):
+            target.unlink(missing_ok=True)
+            raise BrowserDownloadError(
+                f"Download exceeded the configured size limit ({size} bytes)"
+            )
         return {
             "ref": reference,
             "filename": target.name,
-            "bytes": target.stat().st_size,
+            "bytes": size,
         }
 
     async def _ensure_page(self) -> Any:
