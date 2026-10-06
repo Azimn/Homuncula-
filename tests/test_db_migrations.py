@@ -8,9 +8,9 @@ import pytest
 from homuncula.db import (
     BASE_SCHEMA,
     CURRENT_SCHEMA_VERSION,
+    EVIDENCE_SCHEMA,
     Database,
     DatabaseMigrationError,
-    EVIDENCE_SCHEMA,
     Migration,
 )
 
