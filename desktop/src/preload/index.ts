@@ -6,6 +6,7 @@ async function request(path: string, method = "GET", body?: unknown): Promise<an
 
 contextBridge.exposeInMainWorld("homuncula", {
   health: () => request("/health"),
+  installOllama: () => ipcRenderer.invoke("homuncula:install-ollama"),
   restartHost: () => ipcRenderer.invoke("homuncula:restart-backend"),
   state: () => request("/state"),
   pauseAutonomy: () => request("/runtime/pause", "POST"),
@@ -70,6 +71,9 @@ contextBridge.exposeInMainWorld("homuncula", {
   plans: () => request("/plans?limit=100"),
   skills: () => request("/skills"),
   verification: () => request("/verification?limit=100"),
+  models: () => request("/models"),
+  selectModel: (model: string) => request("/models/select", "POST", { model }),
+  pullModel: (model: string) => request("/models/pull", "POST", { model }),
   computerStatus: () => request("/computer/status"),
   windows: () => request("/computer/windows")
 });
