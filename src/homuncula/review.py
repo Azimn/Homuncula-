@@ -9,7 +9,6 @@ from .provider import OllamaProvider
 from .sentinel import Sentinel
 from .skills import SkillStore
 
-
 REVIEW_PROMPT = """
 Review the recent local conversation for durable learning.
 
