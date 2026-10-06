@@ -4,6 +4,7 @@ declare global {
   interface Window {
     homuncula: {
       health: () => Promise<any>;
+      restartHost: () => Promise<any>;
       state: () => Promise<any>;
       pauseAutonomy: () => Promise<any>;
       resumeAutonomy: () => Promise<any>;
