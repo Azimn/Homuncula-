@@ -8,7 +8,6 @@ from typing import Any
 from .evidence import REVIEW_ROLES, VALID_VERDICTS, EvidenceStore
 from .provider import OllamaProvider
 
-
 ROLE_INSTRUCTIONS = {
     "scout": (
         "Assess whether the packet contains material relevant to the claim and identify "
