@@ -141,6 +141,13 @@ type Verification = {
   created_at: string;
 };
 
+type ModelState = {
+  ok: boolean;
+  selected: string;
+  available: string[];
+  error?: string;
+};
+
 type ChatLine = {
   role: "user" | "assistant" | "system";
   content: string;
@@ -211,6 +218,10 @@ function App() {
   const [verification, setVerification] = useState<Verification[]>([]);
   const [windows, setWindows] = useState<WindowRecord[]>([]);
   const [computer, setComputer] = useState<any>(null);
+  const [models, setModels] = useState<ModelState | null>(null);
+  const [modelInput, setModelInput] = useState("qwen3:8b");
+  const [modelBusy, setModelBusy] = useState(false);
+  const [modelMessage, setModelMessage] = useState<string | null>(null);
 
   const [threadId, setThreadId] = useState<string | null>(null);
   const [chat, setChat] = useState<ChatLine[]>([
@@ -248,7 +259,8 @@ function App() {
         nextProcesses,
         nextPlans,
         nextSkills,
-        nextVerification
+        nextVerification,
+        nextModels
       ] = await Promise.all([
         window.homuncula.health(),
         window.homuncula.state(),
@@ -261,7 +273,8 @@ function App() {
         window.homuncula.processes(),
         window.homuncula.plans(),
         window.homuncula.skills(),
-        window.homuncula.verification()
+        window.homuncula.verification(),
+        window.homuncula.models()
       ]);
 
       setHealth(nextHealth as Health);
@@ -276,6 +289,10 @@ function App() {
       setPlans(nextPlans as Plan[]);
       setSkills(nextSkills as Skill[]);
       setVerification(nextVerification as Verification[]);
+      setModels(nextModels as ModelState);
+      if ((nextModels as ModelState).selected) {
+        setModelInput((nextModels as ModelState).selected);
+      }
       setBackendReady(true);
       setError(null);
     } catch (cause) {
@@ -387,6 +404,54 @@ function App() {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function installOllama(): Promise<void> {
+    setModelBusy(true);
+    setModelMessage("Installing Ollama on Windows...");
+    try {
+      const result = await window.homuncula.installOllama();
+      if (result.returncode !== 0) {
+        throw new Error(result.stderr || result.stdout || "Ollama installation failed.");
+      }
+      setModelMessage("Ollama installed. Restarting the local host...");
+      await window.homuncula.restartHost();
+      setBackendReady(false);
+    } catch (cause) {
+      setModelMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setModelBusy(false);
+    }
+  }
+
+  async function pullModel(): Promise<void> {
+    const name = modelInput.trim();
+    if (!name) return;
+    setModelBusy(true);
+    setModelMessage("Pulling " + name + " locally. Large models can take a while.");
+    try {
+      await window.homuncula.pullModel(name);
+      setModelMessage(name + " is installed and selected.");
+      await refresh();
+    } catch (cause) {
+      setModelMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setModelBusy(false);
+    }
+  }
+
+  async function selectModel(name: string): Promise<void> {
+    setModelBusy(true);
+    try {
+      await window.homuncula.selectModel(name);
+      setModelInput(name);
+      setModelMessage(name + " selected.");
+      await refresh();
+    } catch (cause) {
+      setModelMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setModelBusy(false);
     }
   }
 
@@ -615,6 +680,77 @@ function App() {
 
         {view === "home" && (
           <>
+
+            {(!health?.provider?.ok || health.provider.selected_available === false || modelMessage) && (
+              <section className="model-setup card">
+                <div className="card-heading">
+                  <div>
+                    <span className="eyebrow">Local model setup</span>
+                    <h2>
+                      {!health?.provider?.ok
+                        ? "Connect the local inference engine"
+                        : health.provider.selected_available === false
+                          ? "Install the selected model"
+                          : "Local model ready"}
+                    </h2>
+                  </div>
+                  <span className={health?.provider?.ok ? "badge active" : "badge failed"}>
+                    {health?.provider?.ok ? "Ollama detected" : "Ollama unavailable"}
+                  </span>
+                </div>
+                <div className="model-setup-body">
+                  {!health?.provider?.ok && (
+                    <div className="model-step">
+                      <div>
+                        <strong>1. Install Ollama</strong>
+                        <p>Homuncula uses the local Ollama service by default. Installation is performed directly on this Windows PC.</p>
+                      </div>
+                      <button disabled={modelBusy} onClick={() => void installOllama()} type="button">
+                        Install Ollama
+                      </button>
+                    </div>
+                  )}
+                  <div className="model-step">
+                    <div>
+                      <strong>{health?.provider?.ok ? "Choose or install a model" : "2. Install a model after Ollama starts"}</strong>
+                      <p>The model stays on this machine. The default is qwen3:8b, but any installed Ollama chat model can be selected.</p>
+                    </div>
+                    <div className="model-controls">
+                      <input
+                        value={modelInput}
+                        onChange={(event) => setModelInput(event.target.value)}
+                        placeholder="qwen3:8b"
+                      />
+                      <button
+                        disabled={modelBusy || !health?.provider?.ok || !modelInput.trim()}
+                        onClick={() => void pullModel()}
+                        type="button"
+                      >
+                        Pull model
+                      </button>
+                    </div>
+                  </div>
+                  {models?.available?.length ? (
+                    <div className="model-list">
+                      {models.available.map((name) => (
+                        <button
+                          className={name === models.selected ? "model-choice selected" : "model-choice"}
+                          disabled={modelBusy}
+                          key={name}
+                          onClick={() => void selectModel(name)}
+                          type="button"
+                        >
+                          <strong>{name}</strong>
+                          <span>{name === models.selected ? "Selected" : "Use model"}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {modelMessage && <div className="model-message">{modelMessage}</div>}
+                </div>
+              </section>
+            )}
+
             <section className="metrics-row">
               <div><span>Active responsibilities</span><strong>{activeCount}</strong></div>
               <div><span>New findings</span><strong>{newFindingCount}</strong></div>
