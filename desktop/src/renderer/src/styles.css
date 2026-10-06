@@ -830,3 +830,100 @@ button.mini {
     grid-column: auto;
   }
 }
+
+
+.model-setup {
+  margin-bottom: 17px;
+}
+
+.model-setup-body {
+  padding: 0 19px 19px;
+  display: grid;
+  gap: 10px;
+}
+
+.model-step {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 13px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.052);
+}
+
+.model-step strong {
+  color: #ddd7cc;
+  font-size: 11px;
+}
+
+.model-step p {
+  margin: 5px 0 0;
+  max-width: 760px;
+  color: #8f8c85;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.model-controls {
+  min-width: 320px;
+  display: flex;
+  gap: 8px;
+}
+
+.model-controls input {
+  padding: 9px 10px;
+}
+
+.model-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-choice {
+  min-width: 170px;
+  padding: 10px 11px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #cfc9be;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.065);
+}
+
+.model-choice.selected {
+  color: #17130f;
+  background: #d9b47a;
+}
+
+.model-choice strong,
+.model-choice span {
+  font-size: 9px;
+}
+
+.model-message {
+  padding: 10px 11px;
+  border-radius: 10px;
+  color: #c7bba7;
+  background: rgba(217, 180, 122, 0.075);
+  border: 1px solid rgba(217, 180, 122, 0.14);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+@media (max-width: 1180px) {
+  .model-step {
+    grid-template-columns: 1fr;
+  }
+
+  .model-controls {
+    min-width: 0;
+  }
+}
