@@ -121,6 +121,8 @@ class BrowserProvider:
               role: node.getAttribute('role'),
               name: node.getAttribute('aria-label') || node.innerText || node.value || '',
               type: node.getAttribute('type'),
+              href: node.getAttribute('href'),
+              download: node.hasAttribute('download'),
               disabled: Boolean(node.disabled)
             }))
             """
@@ -163,6 +165,39 @@ class BrowserProvider:
         locator = await self._locator(reference)
         await locator.set_input_files(str(path), timeout=15_000)
         return {"ref": reference, "path": path.name}
+
+    async def download(
+        self,
+        reference: str,
+        destination_dir: Path,
+    ) -> dict[str, Any]:
+        locator = await self._locator(reference)
+        destination_dir = Path(destination_dir)
+        destination_dir.mkdir(parents=True, exist_ok=True)
+
+        page = await self._ensure_page()
+        async with page.expect_download(timeout=45_000) as download_info:
+            await locator.click(timeout=15_000)
+        download = await download_info.value
+
+        suggested = Path(download.suggested_filename or "download").name
+        if not suggested or suggested in {".", ".."}:
+            suggested = "download"
+
+        target = destination_dir / suggested
+        stem = target.stem
+        suffix = target.suffix
+        counter = 1
+        while target.exists():
+            target = destination_dir / f"{stem}-{counter}{suffix}"
+            counter += 1
+
+        await download.save_as(str(target))
+        return {
+            "ref": reference,
+            "filename": target.name,
+            "bytes": target.stat().st_size,
+        }
 
     async def _ensure_page(self) -> Any:
         if self._page is None:
