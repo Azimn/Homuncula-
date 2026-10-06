@@ -250,6 +250,7 @@ CREATE TABLE IF NOT EXISTS evidence_dossiers (
     status TEXT NOT NULL,
     confidence REAL NOT NULL,
     precheck_json TEXT NOT NULL,
+    declared_unknowns_json TEXT NOT NULL,
     unknowns_json TEXT NOT NULL,
     review_round_id TEXT,
     promoted_memory_id TEXT REFERENCES memories(id) ON DELETE SET NULL,
@@ -280,7 +281,8 @@ CREATE TABLE IF NOT EXISTS evidence_reviews (
     unknowns_json TEXT NOT NULL,
     valid INTEGER NOT NULL,
     error TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    UNIQUE(dossier_id, round_id, role)
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_reviews_dossier_round
 ON evidence_reviews(dossier_id, round_id, created_at);
