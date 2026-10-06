@@ -599,11 +599,24 @@ class HomunculaRuntime:
             }
 
         if name == "evidence_capture":
-            observation_item = self.evidence.capture_from_receipt(
-                args["receipt_id"],
-                excerpt=args.get("excerpt"),
-                responsibility_id=responsibility_id,
-            )
+            try:
+                observation_item = self.evidence.capture_from_receipt(
+                    args["receipt_id"],
+                    excerpt=args.get("excerpt"),
+                    responsibility_id=responsibility_id,
+                )
+            except (KeyError, ValueError) as exc:
+                self.activity(
+                    "evidence.capture_blocked",
+                    str(exc),
+                    responsibility_id=responsibility_id,
+                    metadata={"receipt_id": args.get("receipt_id")},
+                )
+                return {
+                    "status": "blocked",
+                    "reason": "invalid_evidence_receipt",
+                    "message": str(exc),
+                }
             self.activity(
                 "evidence.observed",
                 (
