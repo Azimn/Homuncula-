@@ -120,6 +120,21 @@ CREATE TABLE IF NOT EXISTS plan_steps (
 CREATE INDEX IF NOT EXISTS idx_plan_steps_plan
 ON plan_steps(plan_id, position);
 
+CREATE TABLE IF NOT EXISTS verification_events (
+    id TEXT PRIMARY KEY,
+    responsibility_id TEXT REFERENCES responsibilities(id) ON DELETE CASCADE,
+    action_id TEXT,
+    kind TEXT NOT NULL,
+    command TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    status TEXT NOT NULL,
+    exit_code INTEGER NOT NULL,
+    output_summary TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_verification_responsibility_time
+ON verification_events(responsibility_id, created_at);
+
 CREATE TABLE IF NOT EXISTS grants (
     id TEXT PRIMARY KEY,
     capability TEXT NOT NULL,
