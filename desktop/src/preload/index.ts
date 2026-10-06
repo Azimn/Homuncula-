@@ -8,6 +8,9 @@ contextBridge.exposeInMainWorld("homuncula", {
   health: () => request("/health"),
   installOllama: () => ipcRenderer.invoke("homuncula:install-ollama"),
   restartHost: () => ipcRenderer.invoke("homuncula:restart-backend"),
+  startupSettings: () => ipcRenderer.invoke("homuncula:startup-settings"),
+  setLaunchAtLogin: (enabled: boolean) =>
+    ipcRenderer.invoke("homuncula:set-launch-at-login", enabled),
   state: () => request("/state"),
   pauseAutonomy: () => request("/runtime/pause", "POST"),
   resumeAutonomy: () => request("/runtime/resume", "POST"),
