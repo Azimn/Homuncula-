@@ -211,7 +211,7 @@ def create_app(
 
     app = FastAPI(
         title="Homuncula",
-        version="0.2.0",
+        version="0.3.0",
         lifespan=lifespan,
     )
     app.state.settings = settings
@@ -248,7 +248,7 @@ def create_app(
     async def health() -> dict[str, Any]:
         return {
             "ok": True,
-            "version": "0.2.0",
+            "version": "0.3.0",
             "workspace": str(settings.workspace),
             "database": str(settings.db_path),
             "proactive_enabled": settings.proactive_enabled,
