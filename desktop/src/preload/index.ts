@@ -81,6 +81,16 @@ contextBridge.exposeInMainWorld("homuncula", {
   plans: () => request("/plans?limit=100"),
   skills: () => request("/skills"),
   verification: () => request("/verification?limit=100"),
+  evidenceDossiers: (status?: string) =>
+    request(
+      "/evidence/dossiers?limit=100" +
+        (status ? "&status=" + encodeURIComponent(status) : "")
+    ),
+  evidenceDossier: (id: string) =>
+    request("/evidence/dossiers/" + encodeURIComponent(id)),
+  evidenceReceipts: () => request("/evidence/receipts?limit=100"),
+  reviewEvidence: (id: string) =>
+    request("/evidence/dossiers/" + encodeURIComponent(id) + "/review", "POST"),
   models: () => request("/models"),
   selectModel: (model: string) => request("/models/select", "POST", { model }),
   pullModel: (model: string) => request("/models/pull", "POST", { model }),
