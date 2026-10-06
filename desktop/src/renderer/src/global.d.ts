@@ -66,6 +66,8 @@ declare global {
       pullModel: (model: string) => Promise<any>;
       computerStatus: () => Promise<any>;
       windows: () => Promise<any>;
+      gitStatus: () => Promise<any>;
+      gitDiff: (path: string, staged?: boolean) => Promise<any>;
     };
   }
 }
