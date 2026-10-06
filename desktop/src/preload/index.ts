@@ -6,6 +6,7 @@ async function request(path: string, method = "GET", body?: unknown): Promise<an
 
 contextBridge.exposeInMainWorld("homuncula", {
   health: () => request("/health"),
+  restartRuntime: () => ipcRenderer.invoke("homuncula:restart-runtime"),
   state: () => request("/state"),
   pauseAutonomy: () => request("/runtime/pause", "POST"),
   resumeAutonomy: () => request("/runtime/resume", "POST"),
@@ -38,6 +39,21 @@ contextBridge.exposeInMainWorld("homuncula", {
   activity: () => request("/activity?limit=150"),
   findings: (status?: string) =>
     request("/findings" + (status ? "?status=" + encodeURIComponent(status) : "")),
+  plans: (responsibilityId?: string) =>
+    request(
+      "/plans" +
+        (responsibilityId
+          ? "?responsibility_id=" + encodeURIComponent(responsibilityId)
+          : "")
+    ),
+  skills: () => request("/skills"),
+  verification: (responsibilityId?: string) =>
+    request(
+      "/verification" +
+        (responsibilityId
+          ? "?responsibility_id=" + encodeURIComponent(responsibilityId)
+          : "")
+    ),
   memory: (query?: string) =>
     query
       ? request("/memory/search?q=" + encodeURIComponent(query) + "&limit=50")
@@ -67,5 +83,13 @@ contextBridge.exposeInMainWorld("homuncula", {
   processes: () => request("/processes?limit=100"),
   subscriptions: () => request("/subscriptions"),
   computerStatus: () => request("/computer/status"),
-  windows: () => request("/computer/windows")
+  windows: () => request("/computer/windows"),
+  gitStatus: () => request("/computer/git"),
+  gitDiff: (path: string, staged = false) =>
+    request(
+      "/computer/git/diff?path=" +
+        encodeURIComponent(path) +
+        "&staged=" +
+        String(staged)
+    )
 });
