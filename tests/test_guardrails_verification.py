@@ -63,3 +63,31 @@ def test_command_classification_and_text_redaction() -> None:
     assert classify_command(["npm", "run", "build"]) == "build"
     assert classify_command(["git", "status", "--short"]) == "inspection"
     assert redact_text("api_key=abc123 password:letmein").count(REDACTED) == 2
+
+
+def test_verification_marks_timeouts_and_truncated_capture(tmp_path: Path) -> None:
+    db = Database(tmp_path / "verify-timeout.sqlite3")
+    db.initialize()
+    store = VerificationStore(db)
+
+    record = store.record_process(
+        action_id="action-timeout",
+        responsibility_id="resp-timeout",
+        result={
+            "argv": ["python", "-c", "import time; time.sleep(30)"],
+            "cwd": ".",
+            "returncode": -1,
+            "stdout": "x" * 10000,
+            "stderr": "",
+            "stdout_truncated": True,
+            "stderr_truncated": False,
+            "timed_out": True,
+        },
+    )
+
+    assert record["status"] == "timed_out"
+    assert record["stdout_summary"].startswith("[captured output truncated]")
+    assert len(record["stdout_summary"]) <= 4000
+
+    summary = store.summary("resp-timeout")
+    assert summary["has_failed"] is True
