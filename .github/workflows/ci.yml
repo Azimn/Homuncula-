@@ -84,7 +84,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path desktop/resources | Out-Null
-          python -m PyInstaller --noconfirm --clean --onefile --name agentd --distpath desktop/resources --workpath build/pyinstaller --specpath build --collect-all playwright --collect-all pywinauto agentd_entry.py
+          python -m PyInstaller --noconfirm --clean --onefile --name agentd --distpath desktop/resources --workpath build/pyinstaller --specpath build --collect-all playwright --collect-all pywinauto --collect-all sherpa_onnx agentd_entry.py
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm install
