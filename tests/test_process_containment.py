@@ -46,14 +46,14 @@ def test_foreground_process_has_bounded_output_and_minimal_environment(
             "-c",
             (
                 "import os,sys;"
-                "sys.stdout.write(os.environ.get('HOMUNCULA_TEST_SECRET','missing')+'\\n');"
-                "sys.stdout.write('x'*200000)"
+                "sys.stdout.write('x'*200000);"
+                "sys.stdout.write('\\nENV='+os.environ.get('HOMUNCULA_TEST_SECRET','missing'))"
             ),
         ]
     )
 
     assert result["returncode"] == 0
-    assert result["stdout"].startswith("missing\n") is False
+    assert result["stdout"].endswith("\nENV=missing")
     assert "should-not-cross-boundary" not in result["stdout"]
     assert result["stdout_bytes"] > 100_000
     assert result["stdout_truncated"] is True
@@ -98,8 +98,8 @@ async def test_background_output_is_bounded_and_secret_free(
             "-c",
             (
                 "import os,sys;"
-                "sys.stdout.write(os.environ.get('HOMUNCULA_TEST_SECRET','missing')+'\\n');"
-                "sys.stdout.write('y'*200000)"
+                "sys.stdout.write('y'*200000);"
+                "sys.stdout.write('\\nENV='+os.environ.get('HOMUNCULA_TEST_SECRET','missing'))"
             ),
         ]
     )
@@ -109,6 +109,7 @@ async def test_background_output_is_bounded_and_secret_free(
     row = manager.get(started["process_id"])
     assert row["status"] == "completed"
     assert "should-not-cross-boundary" not in (row["stdout"] or "")
+    assert row["stdout"].endswith("\nENV=missing")
     assert row["stdout"].startswith("[output truncated;")
     assert len(row["stdout"].encode("utf-8")) < 101_000
 
