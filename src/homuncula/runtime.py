@@ -14,6 +14,7 @@ from .computer import WindowsHostComputer
 from .context import ContextCompiler
 from .db import Database
 from .events import EventHub
+from .guardrails import ToolLoopGuard
 from .memory import MemoryStore
 from .plans import PlanStore
 from .processes import BackgroundProcessManager
@@ -21,6 +22,7 @@ from .provider import OllamaProvider
 from .sentinel import Sentinel
 from .skills import SkillStore
 from .tool_specs import TOOLS
+from .verification import VerificationStore
 from .windows_ui import WindowsUIProvider
 
 
@@ -46,7 +48,8 @@ would normally allow them.
 
 Use durable memory for facts, preferences, decisions, relationships, and commitments that are
 likely to matter later. Use event subscriptions and scheduled wakes only for concrete future
-dependencies. Avoid polling loops.
+dependencies. Avoid polling loops. When coding or changing software, use verification_status
+and actual test, lint, typecheck, or build evidence before claiming work is verified.
 
 Do not expose hidden chain-of-thought. Report conclusions, evidence, completed operations,
 pending approvals, and future dependencies.
@@ -68,6 +71,7 @@ class HomunculaRuntime:
         processes: BackgroundProcessManager,
         plans: PlanStore,
         skills: SkillStore,
+        verification: VerificationStore,
     ):
         self.db = db
         self.computer = computer
@@ -81,6 +85,7 @@ class HomunculaRuntime:
         self.processes = processes
         self.plans = plans
         self.skills = skills
+        self.verification = verification
 
     def activity(
         self,
@@ -283,6 +288,7 @@ class HomunculaRuntime:
 
         pending_actions: list[str] = []
         final_content = ""
+        guard = ToolLoopGuard()
 
         for _ in range(20):
             response = await self.provider.chat(messages, TOOLS)
@@ -305,13 +311,30 @@ class HomunculaRuntime:
                 args = fn.get("arguments") or {}
                 if isinstance(args, str):
                     args = json.loads(args)
-
-                result = await self._call_tool(
-                    name,
-                    args,
-                    responsibility_id=responsibility_id,
-                    observation=observation,
-                )
+                if not isinstance(args, dict):
+                    result = {"error": "Tool arguments must be an object"}
+                else:
+                    guard_decision = guard.before(name, args)
+                    if not guard_decision.allowed:
+                        result = {
+                            "status": "blocked",
+                            "reason": guard_decision.code,
+                            "message": guard_decision.message,
+                        }
+                        self.activity(
+                            "guardrail.blocked",
+                            guard_decision.message,
+                            responsibility_id=responsibility_id,
+                            metadata={"tool": name, "code": guard_decision.code},
+                        )
+                    else:
+                        result = await self._call_tool(
+                            name,
+                            args,
+                            responsibility_id=responsibility_id,
+                            observation=observation,
+                        )
+                        guard.after(name, args, result)
                 if result.get("status") == "approval_required":
                     pending_actions.append(result["action_id"])
 
@@ -580,6 +603,15 @@ class HomunculaRuntime:
                 metadata={"plan_id": updated["id"]},
             )
             return updated
+
+        if name == "verification_status":
+            return {
+                "verification": self.verification.summary(responsibility_id),
+                "events": self.verification.list(
+                    responsibility_id=responsibility_id,
+                    limit=20,
+                ),
+            }
 
         if name == "skills_list":
             return {"skills": self.skills.list()}
@@ -854,11 +886,15 @@ class HomunculaRuntime:
                 ),
             }
 
+        governed_args = dict(args)
+        if responsibility_id:
+            governed_args["_responsibility_id"] = responsibility_id
+
         decision = self.sentinel.request(
             capability=capability,
             target=target,
             intent=intent,
-            args=args,
+            args=governed_args,
             preview=preview,
             risk=risk,
             force_approval=observation,
@@ -893,6 +929,7 @@ class HomunculaRuntime:
         action = self.sentinel.mark_executing(action_id)
         args = self.sentinel.args(action)
         capability = action["capability"]
+        responsibility_id = args.get("_responsibility_id")
         try:
             if capability == "filesystem.list":
                 result = self.computer.list_files(
@@ -910,11 +947,22 @@ class HomunculaRuntime:
                     cwd=args.get("cwd", "."),
                     timeout=int(args.get("timeout", 120)),
                 )
+                evidence = self.verification.record_process(
+                    argv=args["argv"],
+                    cwd=args.get("cwd", "."),
+                    returncode=int(result["returncode"]),
+                    stdout=result.get("stdout", ""),
+                    stderr=result.get("stderr", ""),
+                    responsibility_id=responsibility_id,
+                    action_id=action_id,
+                )
+                if evidence:
+                    result["verification"] = evidence
             elif capability == "process.start":
                 result = await self.processes.start(
                     args["argv"],
                     cwd=args.get("cwd", "."),
-                    responsibility_id=args.get("responsibility_id"),
+                    responsibility_id=responsibility_id,
                 )
             elif capability == "process.read":
                 result = self.processes.get(args["process_id"])
@@ -969,6 +1017,7 @@ class HomunculaRuntime:
             self.activity(
                 "action.completed",
                 action["preview"],
+                responsibility_id=responsibility_id,
                 metadata={"action_id": action_id, "result": result},
             )
             return {
@@ -981,6 +1030,7 @@ class HomunculaRuntime:
             self.activity(
                 "action.failed",
                 str(exc),
+                responsibility_id=responsibility_id,
                 metadata={"action_id": action_id, "capability": capability},
             )
             raise
