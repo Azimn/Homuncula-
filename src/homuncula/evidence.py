@@ -6,8 +6,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from .auth import redact_payload, redact_text
 from .db import Database
+from .auth import redact_payload, redact_text
 
 
 REVIEW_ROLES = ("scout", "verifier", "skeptic", "integrator")
