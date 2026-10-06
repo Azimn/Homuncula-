@@ -2,86 +2,74 @@
 
 ## Purpose
 
-Homuncula is a persistent local agent runtime. A chat turn is an interface event, not the unit of identity or work. Durable state lives outside the model so a responsibility can survive context compression, application restart, model replacement, or a long period of inactivity.
+Homuncula is a persistent local agent runtime. A chat turn is an interface event, not the unit of identity or work. Durable state lives outside the rendering model so responsibilities survive context compression, application restart, model replacement, and long periods of inactivity.
 
-## Runtime boundaries
+## Trust domains
 
-The system has three trust domains.
+The Desktop is the user's control surface. It displays conversation, responsibilities, plans, skills, verification, findings, memory, permissions, computer state, voice setup, and takeover controls.
 
-The Desktop is the user's control surface. It displays conversation, activity, memory, responsibilities, approvals, permissions, computer state, and takeover controls.
+Agent Runtime owns cognition and persistence. It compiles context, talks to the selected local model, maintains responsibilities, schedules wakes, records verification, manages local skills, performs bounded review, and proposes tool calls.
 
-Agent Runtime owns cognition. It compiles context, talks to the local model, maintains responsibilities, schedules wakes, retrieves memory, records activity, and proposes tool calls. It is not allowed to treat possession of a model response as proof that an operating-system action is authorized.
-
-Sentinel owns authority. Every externally meaningful mutation is represented as a typed capability request. Sentinel evaluates explicit grants and policy. It records the proposal before execution. Unknown capabilities are denied. Sensitive operations default to approval.
+Sentinel owns authority. Externally meaningful mutations are typed capability requests. Sentinel evaluates grants and policy before execution. Unknown capabilities are denied. Observation retains read access but cannot silently consume standing mutation grants.
 
 ## Durable state
 
-SQLite is the initial system of record. The schema separates threads and messages from memories, responsibilities, wakes, activities, grants, and actions.
+SQLite is the system of record for threads, messages, responsibilities, wakes, memories, memory revisions, vectors, grants, actions, activities, event subscriptions, event receipts, findings, plans, plan steps, background processes, verification events, and runtime settings.
 
-Responsibilities represent ongoing obligations. A responsibility can be active, idle, paused, complete, or failed. It owns a conversation thread so resumed work can reconstruct recent context while memory and activity history remain separately queryable.
+Responsibilities represent ongoing obligations and own a conversation thread. Plans represent durable execution state for mutating autonomous work. Wakes are transactionally claimed persisted events. Findings are user-visible outcomes of proactive observation.
 
-Wakes are persisted events. A wake can be time based today and event based later. Claiming a wake is transactional so process restarts do not silently duplicate work.
+Memories preserve kind, scope, source, confidence, metadata, timestamps, and revision history. Retrieval combines SQLite FTS5 with an embedded deterministic semantic vector index. The context compiler combines relevant memory, responsibility state, plan state, skills, verification evidence, activity history, and recent conversation within a token budget.
 
-Memories are structured records with kind, scope, source, confidence, and timestamps. Lexical retrieval uses SQLite FTS5 when available. A local vector index can be added later without changing the memory API.
+## Provider boundary
 
-Activities are operational provenance. They explain what happened without exposing hidden chain of thought. Examples include a wake firing, a tool being requested, an approval being required, a process completing, or a responsibility failing.
+The model provider receives normalized messages and tool schemas and returns normalized text and tool calls. Ollama is the current provider, but the rest of Homuncula does not store identity, plan state, authority, memory, or permissions inside Ollama.
 
-## Model boundary
-
-The provider interface receives messages and tool schemas and returns normalized text plus normalized tool calls.
-
-The first provider targets Ollama because it is local, easy to install, and exposes tool calling. The rest of Homuncula does not import Ollama-specific concepts.
-
-The model does not own the authoritative plan, grants, action state, memory database, or wake schedule. It renders decisions against external state.
+The selected model is persisted in SQLite and can be changed from the desktop.
 
 ## Capability boundary
 
-The initial capability vocabulary is intentionally small.
+Current capability families include filesystem reads and writes, foreground and background processes, browser navigation and interaction, browser upload and download, Windows UI inspection and interaction, memory operations, responsibility state, event subscriptions, findings, local skill installation, and wake scheduling.
 
-    filesystem.list
-    filesystem.read
-    filesystem.write
-    process.exec
-    memory.search
-    memory.remember
-    runtime.schedule_wake
+Workspace paths are resolved against the configured workspace. Browser direct navigation is limited to HTTP and HTTPS. Browser content is treated as untrusted data and scanned for common prompt-injection indicators. Native application interaction uses Windows UI Automation references rather than coordinate-first control.
 
-Filesystem reads are restricted to the registered workspace by the computer provider. Filesystem writes and process execution require Sentinel authorization. Memory and wake operations are internal capabilities and remain auditable.
+Sensitive operations cross Sentinel. Standing grants are scoped by capability and resource. Autonomous mutation associated with a responsibility also requires an active durable plan.
 
-Future providers can add browser.navigate, browser.interact, windows.ui.read, windows.ui.interact, connector.read, connector.write, notification.send, and skill.install without changing the core permission model.
+## Verification and loop control
 
-## Approval lifecycle
+Process checks are recorded separately from ordinary activity. Verification records retain command, working directory, exit status, and bounded redacted output. The model is instructed not to claim verification beyond the scope of successful recorded evidence.
 
-An action moves through explicit states.
-
-    proposed -> pending -> approved -> executing -> completed
-                         \-> denied
-                                      \-> failed
-
-An existing grant may move a proposal directly to approved. A denied or unknown capability never reaches an executor.
-
-The execution record stores the capability, target, intent, arguments, preview, decision, result, and timestamps. The local model does not receive credentials or unrestricted authority just because an action was approved.
-
-## Workspace containment
-
-The first Windows host provider uses pathlib resolution and rejects paths that escape the configured workspace. Process execution receives an argv array and uses shell=False.
-
-Native UI Automation and browser automation will be separate providers with their own scoped permissions. A later restricted execution provider will use Windows isolation primitives for generated code.
+A per-turn loop guard limits total calls, repeated use of one tool, repeated identical calls, and repeated identical results. Repeated no-progress behavior becomes an explicit guardrail event rather than an infinite agent loop.
 
 ## Proactivity
 
-Proactivity is event driven.
+Proactivity is event driven. Responsibilities can wake from scheduled times, filesystem changes, Git changes, process completion, or runtime events. Event subscriptions and receipts are durable and duplicate events are suppressed.
 
-A responsibility can schedule a future wake. Later versions will support filesystem changes, process completion, Git changes, email events, calendar events, connector notifications, and user-defined event sources.
+Observation mode is read-only. It may inspect state, create findings, or propose mutations, but the proposed mutation remains pending even if a standing grant would normally allow it.
 
-Observation mode is read-only. An observation may create a finding or proposed action, but it may not silently cross into a mutating capability. This preserves useful proactive behavior without letting curiosity become authority.
+The user can globally pause autonomous wakes without disabling direct conversation or inspection.
 
-## Locality
+## Bounded learning
 
-Core operation must not require a cloud service. Local state stays on disk. Model inference can use Ollama or llama.cpp on localhost. External network access is a capability used for tasks that inherently require the network, not an infrastructure dependency.
+A post-turn reviewer receives a pruned recent conversation with no tools. It may store a small number of high-confidence durable memories. Exact known memories are not duplicated.
 
-## Versioning contract
+The reviewer may suggest reusable local skills, but skill installation is a Sentinel action and requires approval. Concurrent reviews for one thread are coalesced and duplicate pending skill proposals are suppressed.
 
-Database migrations must be explicit. Tool schemas must remain versioned. Action names are part of the security boundary and cannot be casually renamed. Unknown actions remain denied by default.
+## Voice boundary
 
-The desktop may evolve independently from the runtime as long as it speaks the versioned local API.
+Voice is optional and local. The Electron renderer owns microphone permission and capture. Recorded audio is decoded and converted to mono 16 kHz PCM WAV in the renderer. A narrow Electron IPC method sends those bytes to the owner-authenticated local API.
+
+Speech recognition uses sherpa-onnx with Whisper tiny.en int8. Speech synthesis uses sherpa-onnx with Kokoro. Voice models are downloaded on demand into the user data directory and are not part of persistent model context.
+
+Voice model archives are extracted only after path containment checks, and symbolic or hard links are rejected. Audio is not sent to a remote speech API.
+
+## Secret boundary
+
+The local API requires a random owner token even on loopback. Electron main owns the token and the renderer receives only a narrow IPC surface. Windows connector secrets use DPAPI-backed storage and are referenced by opaque handles. Structured payloads and verification output are redacted before persistence.
+
+## Desktop lifecycle
+
+The packaged desktop starts the frozen `agentd` process, remains available in the tray, can launch hidden at login, emits native notifications for new findings and pending approvals, and exposes explicit host recovery. Closing the main window does not terminate the local runtime.
+
+## Versioning
+
+Database migrations, tool schemas, capability names, IPC paths, and local API paths are security-sensitive interfaces. Unknown capability names remain denied by default. New runtime features must preserve that default-deny contract.
