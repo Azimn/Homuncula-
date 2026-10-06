@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-type View = "home" | "work" | "changes" | "memory" | "findings" | "permissions" | "computer" | "activity";
+type View = "home" | "work" | "evidence" | "changes" | "memory" | "findings" | "permissions" | "computer" | "activity";
 
 type Health = {
   ok: boolean;
@@ -141,6 +141,72 @@ type Verification = {
   created_at: string;
 };
 
+type EvidenceSource = {
+  id: string;
+  kind: string;
+  locator: string;
+  title: string;
+};
+
+type EvidenceObservation = {
+  id: string;
+  content: string;
+  observed_at: string;
+  verified_provenance: boolean;
+  receipt_ids: string[];
+  source: EvidenceSource;
+};
+
+type EvidenceReview = {
+  id: string;
+  role: string;
+  verdict: "pass" | "hold" | "reject";
+  confidence: number;
+  reasons: string[];
+  evidence_ids: string[];
+  unknowns: string[];
+  valid: boolean;
+  error?: string | null;
+  created_at: string;
+};
+
+type EvidenceDossier = {
+  id: string;
+  responsibility_id?: string | null;
+  claim: string;
+  status: "pass" | "hold" | "reject";
+  confidence: number;
+  precheck: {
+    observation_count?: number;
+    verified_observation_count?: number;
+    all_observations_verified?: boolean;
+    distinct_source_count?: number;
+    source_kinds?: string[];
+  };
+  declared_unknowns: string[];
+  unknowns: string[];
+  review_round_id?: string | null;
+  promoted_memory_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  reviewed_at?: string | null;
+  observations?: EvidenceObservation[];
+  reviews?: EvidenceReview[];
+};
+
+type EvidenceReceipt = {
+  id: string;
+  action_id: string;
+  capability: string;
+  source_kind: string;
+  locator: string;
+  title: string;
+  content_hash: string;
+  content_preview: string;
+  content_chars: number;
+  created_at: string;
+};
+
 type GitFile = {
   index: string;
   worktree: string;
@@ -251,6 +317,11 @@ const VIEW_COPY: Record<View, { eyebrow: string; title: string; subtitle: string
     title: "Plans, skills, and proof of work.",
     subtitle: "See what the agent intends to do, what reusable procedures it knows, and what checks actually passed."
   },
+  evidence: {
+    eyebrow: "Epistemic provenance",
+    title: "See why Homuncula believes what it believes.",
+    subtitle: "Inspect source receipts, claim dossiers, reviewer disagreement, unknowns, and promotion state."
+  },
   changes: {
     eyebrow: "Workspace state",
     title: "Inspect what changed before anything ships.",
@@ -308,6 +379,12 @@ function App() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [verification, setVerification] = useState<Verification[]>([]);
+  const [evidenceDossiers, setEvidenceDossiers] = useState<EvidenceDossier[]>([]);
+  const [evidenceReceipts, setEvidenceReceipts] = useState<EvidenceReceipt[]>([]);
+  const [evidenceDetail, setEvidenceDetail] = useState<EvidenceDossier | null>(null);
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
+  const [evidenceFilter, setEvidenceFilter] = useState<"all" | "pass" | "hold" | "reject">("all");
+  const [evidenceBusy, setEvidenceBusy] = useState(false);
   const [windows, setWindows] = useState<WindowRecord[]>([]);
   const [computer, setComputer] = useState<any>(null);
   const [gitState, setGitState] = useState<GitState | null>(null);
@@ -434,6 +511,33 @@ function App() {
     }
   }, []);
 
+  const refreshEvidence = useCallback(async () => {
+    try {
+      const [dossiers, receipts] = await Promise.all([
+        window.homuncula.evidenceDossiers(
+          evidenceFilter === "all" ? undefined : evidenceFilter
+        ),
+        window.homuncula.evidenceReceipts()
+      ]);
+      setEvidenceDossiers(dossiers as EvidenceDossier[]);
+      setEvidenceReceipts(receipts as EvidenceReceipt[]);
+      if (selectedEvidenceId) {
+        const detail = await window.homuncula.evidenceDossier(selectedEvidenceId);
+        setEvidenceDetail(detail as EvidenceDossier);
+      } else if (dossiers.length) {
+        const first = dossiers[0] as EvidenceDossier;
+        setSelectedEvidenceId(first.id);
+        const detail = await window.homuncula.evidenceDossier(first.id);
+        setEvidenceDetail(detail as EvidenceDossier);
+      } else {
+        setEvidenceDetail(null);
+      }
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [evidenceFilter, selectedEvidenceId]);
+
   const refreshChanges = useCallback(async () => {
     try {
       const status = (await window.homuncula.gitStatus()) as GitState;
@@ -468,7 +572,8 @@ function App() {
   useEffect(() => {
     if (view === "computer") void refreshComputer();
     if (view === "changes") void refreshChanges();
-  }, [view, refreshComputer, refreshChanges]);
+    if (view === "evidence") void refreshEvidence();
+  }, [view, refreshComputer, refreshChanges, refreshEvidence]);
 
   useEffect(() => {
     void (async () => {
@@ -822,6 +927,37 @@ function App() {
     }
   }
 
+  async function selectEvidenceDossier(id: string): Promise<void> {
+    setSelectedEvidenceId(id);
+    setEvidenceBusy(true);
+    try {
+      const detail = await window.homuncula.evidenceDossier(id);
+      setEvidenceDetail(detail as EvidenceDossier);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setEvidenceBusy(false);
+    }
+  }
+
+  async function reviewEvidenceDossier(id: string): Promise<void> {
+    setEvidenceBusy(true);
+    try {
+      const detail = await window.homuncula.reviewEvidence(id);
+      setEvidenceDetail(detail as EvidenceDossier);
+      const dossiers = await window.homuncula.evidenceDossiers(
+        evidenceFilter === "all" ? undefined : evidenceFilter
+      );
+      setEvidenceDossiers(dossiers as EvidenceDossier[]);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setEvidenceBusy(false);
+    }
+  }
+
   async function loadGitDiff(file: GitFile): Promise<void> {
     setSelectedGitPath(file.path);
     try {
@@ -913,8 +1049,9 @@ function App() {
             [
               ["home", "Home"],
               ["work", "Work"],
-              ["changes", "Changes"],
+              ["evidence", "Evidence"],
               ["memory", "Memory"],
+              ["changes", "Changes"],
               ["findings", "Findings"],
               ["permissions", "Permissions"],
               ["computer", "Computer"],
@@ -1372,6 +1509,224 @@ function App() {
                   </div>
                 ))}
               </div>
+            </div>
+          </section>
+        )}
+
+        {view === "evidence" && (
+          <section className="evidence-layout">
+            <div className="card evidence-list">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Claim dossiers</span>
+                  <h2>Evidence state</h2>
+                </div>
+                <button
+                  className="ghost"
+                  disabled={evidenceBusy}
+                  onClick={() => void refreshEvidence()}
+                  type="button"
+                >
+                  Refresh
+                </button>
+              </div>
+              <div className="evidence-filters">
+                {(["all", "pass", "hold", "reject"] as const).map((status) => (
+                  <button
+                    className={evidenceFilter === status ? "filter active" : "filter"}
+                    key={status}
+                    onClick={() => {
+                      setEvidenceFilter(status);
+                      setSelectedEvidenceId(null);
+                      setEvidenceDetail(null);
+                    }}
+                    type="button"
+                  >
+                    {status.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <div className="evidence-dossier-list">
+                {evidenceDossiers.length === 0 && (
+                  <div className="empty">No evidence dossiers match this filter.</div>
+                )}
+                {evidenceDossiers.map((dossier) => (
+                  <button
+                    className={
+                      selectedEvidenceId === dossier.id
+                        ? "evidence-dossier selected"
+                        : "evidence-dossier"
+                    }
+                    key={dossier.id}
+                    onClick={() => void selectEvidenceDossier(dossier.id)}
+                    type="button"
+                  >
+                    <div>
+                      <span className={"badge " + dossier.status}>
+                        {dossier.status}
+                      </span>
+                      <strong>{dossier.claim}</strong>
+                    </div>
+                    <span>
+                      {Math.round(dossier.confidence * 100)}% · {relativeTime(dossier.updated_at)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="receipt-section">
+                <div className="card-heading compact">
+                  <div>
+                    <span className="eyebrow">Verified reads</span>
+                    <h2>Recent receipts</h2>
+                  </div>
+                  <span className="count">{evidenceReceipts.length}</span>
+                </div>
+                <div className="receipt-list">
+                  {evidenceReceipts.length === 0 && (
+                    <div className="empty">No verified read receipts yet.</div>
+                  )}
+                  {evidenceReceipts.slice(0, 30).map((receipt) => (
+                    <div className="receipt-row" key={receipt.id}>
+                      <div>
+                        <strong>{receipt.title || receipt.locator}</strong>
+                        <span>{receipt.source_kind} · {receipt.capability}</span>
+                      </div>
+                      <p>{receipt.content_preview}</p>
+                      <time>{relativeTime(receipt.created_at)}</time>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="card evidence-detail">
+              {!evidenceDetail ? (
+                <div className="empty evidence-empty">
+                  Select a dossier to inspect its evidence chain.
+                </div>
+              ) : (
+                <>
+                  <div className="card-heading">
+                    <div>
+                      <span className="eyebrow">Reviewed claim</span>
+                      <h2>{evidenceDetail.claim}</h2>
+                    </div>
+                    <div className="evidence-actions">
+                      <span className={"badge " + evidenceDetail.status}>
+                        {evidenceDetail.status}
+                      </span>
+                      <button
+                        className="ghost"
+                        disabled={evidenceBusy}
+                        onClick={() => void reviewEvidenceDossier(evidenceDetail.id)}
+                        type="button"
+                      >
+                        {evidenceBusy ? "Reviewing..." : "Run review"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="evidence-metrics">
+                    <div>
+                      <span>Confidence</span>
+                      <strong>{Math.round(evidenceDetail.confidence * 100)}%</strong>
+                    </div>
+                    <div>
+                      <span>Observations</span>
+                      <strong>{evidenceDetail.precheck?.observation_count || 0}</strong>
+                    </div>
+                    <div>
+                      <span>Verified</span>
+                      <strong>{evidenceDetail.precheck?.verified_observation_count || 0}</strong>
+                    </div>
+                    <div>
+                      <span>Promoted</span>
+                      <strong>{evidenceDetail.promoted_memory_id ? "Yes" : "No"}</strong>
+                    </div>
+                  </div>
+
+                  <div className="evidence-section">
+                    <div className="section-title">
+                      <span className="eyebrow">Unknowns</span>
+                      <strong>{evidenceDetail.unknowns.length}</strong>
+                    </div>
+                    {evidenceDetail.unknowns.length === 0 ? (
+                      <div className="empty">No unresolved unknowns are recorded.</div>
+                    ) : (
+                      <ul className="unknown-list">
+                        {evidenceDetail.unknowns.map((unknown, index) => (
+                          <li key={index}>{unknown}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
+                  <div className="evidence-section">
+                    <div className="section-title">
+                      <span className="eyebrow">Observations</span>
+                      <strong>{evidenceDetail.observations?.length || 0}</strong>
+                    </div>
+                    <div className="observation-list">
+                      {evidenceDetail.observations?.map((observation) => (
+                        <div className="observation-card" key={observation.id}>
+                          <div className="observation-source">
+                            <div>
+                              <strong>
+                                {observation.source.title || observation.source.locator}
+                              </strong>
+                              <span>{observation.source.kind} · {observation.source.locator}</span>
+                            </div>
+                            <span
+                              className={
+                                observation.verified_provenance
+                                  ? "badge active"
+                                  : "badge"
+                              }
+                            >
+                              {observation.verified_provenance
+                                ? "verified receipt"
+                                : "manual"}
+                            </span>
+                          </div>
+                          <pre>{observation.content}</pre>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="evidence-section">
+                    <div className="section-title">
+                      <span className="eyebrow">Reviewer council</span>
+                      <strong>{evidenceDetail.reviews?.length || 0}</strong>
+                    </div>
+                    <div className="review-grid">
+                      {evidenceDetail.reviews?.map((review) => (
+                        <div className="review-card" key={review.id}>
+                          <div className="review-heading">
+                            <strong>{review.role}</strong>
+                            <span className={"badge " + review.verdict}>
+                              {review.verdict}
+                            </span>
+                          </div>
+                          <span>{Math.round(review.confidence * 100)}% confidence</span>
+                          {review.reasons.map((reason, index) => (
+                            <p key={index}>{reason}</p>
+                          ))}
+                          {review.unknowns.length > 0 && (
+                            <small>Unknowns: {review.unknowns.join(" · ")}</small>
+                          )}
+                          {!review.valid && (
+                            <small className="review-error">
+                              Invalid review{review.error ? ": " + review.error : ""}
+                            </small>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </section>
         )}
