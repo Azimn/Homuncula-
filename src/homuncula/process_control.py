@@ -5,8 +5,9 @@ import signal
 import subprocess
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import BinaryIO, Mapping
+from typing import BinaryIO
 
 
 DEFAULT_CAPTURE_BYTES = 100_000
