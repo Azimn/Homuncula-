@@ -76,6 +76,12 @@ class BrowserProvider:
             self._playwright = None
 
     async def navigate(self, url: str) -> dict[str, Any]:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("Browser navigation is limited to http(s) URLs")
+        if parsed.username or parsed.password:
+            raise ValueError("Credentials must not be embedded in browser URLs")
+
         page = await self._ensure_page()
         response = await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
         return {
