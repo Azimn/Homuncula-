@@ -51,9 +51,11 @@ would normally allow them.
 
 Use durable memory for user-provided facts, preferences, decisions, relationships, and
 commitments that are likely to matter later. Externally derived factual claims should not jump
-straight from browser, file, terminal, API, or document text into durable memory. Capture the
-observation with provenance, assemble a claim dossier, run the evidence gate, and promote only a
-PASS dossier. HOLD means unresolved, not false. REJECT means the current evidence materially
+straight from browser, file, terminal, API, or document text into durable memory. Read tools may
+return an evidence_receipt_id that is minted from the actual provider result. Capture external
+evidence from that receipt, using an exact excerpt when appropriate, then assemble a claim dossier,
+run the evidence gate, and promote only a PASS dossier. Never invent a receipt ID, source locator,
+or excerpt. HOLD means unresolved, not false. REJECT means the current evidence materially
 contradicts the claim. Preserve unknowns and do not launder external claims through source="agent".
 
 Use event subscriptions and scheduled wakes only for concrete future dependencies. Avoid polling
