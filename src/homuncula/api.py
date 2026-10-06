@@ -16,6 +16,7 @@ from .config import Settings
 from .context import ContextCompiler
 from .db import Database
 from .events import EventHub, WorkspaceEventSource
+from .git_inspector import GitInspector, GitUnavailable
 from .memory import MemoryStore
 from .plans import PlanStore
 from .processes import BackgroundProcessManager
@@ -29,6 +30,7 @@ from .secrets_store import (
 )
 from .sentinel import Sentinel
 from .skills import SkillStore
+from .verification import VerificationStore
 from .windows_ui import WindowsUIProvider
 
 
@@ -94,6 +96,8 @@ def create_app(
     db.initialize()
     memory = MemoryStore(db)
     sentinel = Sentinel(db)
+    verification = VerificationStore(db)
+    git = GitInspector(settings.workspace)
     provider = OllamaProvider(settings.ollama_base_url, settings.model)
     computer = WindowsHostComputer(settings.workspace)
     plans = PlanStore(db)
@@ -145,6 +149,7 @@ def create_app(
         processes,
         plans,
         skills,
+        verification,
     )
     runtime_holder["runtime"] = runtime
     scheduler = WakeScheduler(db, runtime.run_responsibility)
@@ -488,6 +493,36 @@ def create_app(
     @app.delete("/grants/{grant_id}", status_code=204)
     async def revoke_grant(grant_id: str) -> None:
         sentinel.revoke_grant(grant_id)
+
+    @app.get("/verification")
+    async def verification_events(
+        responsibility_id: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        return {
+            "summary": verification.summary(responsibility_id),
+            "events": verification.list(
+                responsibility_id=responsibility_id,
+                limit=limit,
+            ),
+        }
+
+    @app.get("/computer/git")
+    async def computer_git() -> dict[str, Any]:
+        try:
+            return git.status()
+        except GitUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/computer/git/diff")
+    async def computer_git_diff(
+        path: str,
+        staged: bool = False,
+    ) -> dict[str, Any]:
+        try:
+            return git.diff(path, staged=staged)
+        except (GitUnavailable, PermissionError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/computer/status")
     async def computer_status() -> dict[str, Any]:
