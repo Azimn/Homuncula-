@@ -90,6 +90,7 @@ class HomunculaRuntime:
         self.review_enabled = review_enabled
         self.reviewer = PostTurnReviewer(provider, memory, skills, sentinel)
         self._review_tasks: set[asyncio.Task[None]] = set()
+        self._review_by_thread: dict[str, asyncio.Task[None]] = {}
 
     def activity(
         self,
@@ -417,12 +418,23 @@ class HomunculaRuntime:
         }
 
     def _schedule_review(self, thread_id: str) -> None:
+        previous = self._review_by_thread.get(thread_id)
+        if previous and not previous.done():
+            previous.cancel()
+
         task = asyncio.create_task(
             self._run_review(thread_id),
             name=f"homuncula-review-{thread_id[:8]}",
         )
         self._review_tasks.add(task)
-        task.add_done_callback(self._review_tasks.discard)
+        self._review_by_thread[thread_id] = task
+
+        def cleanup(done: asyncio.Task[None]) -> None:
+            self._review_tasks.discard(done)
+            if self._review_by_thread.get(thread_id) is done:
+                self._review_by_thread.pop(thread_id, None)
+
+        task.add_done_callback(cleanup)
 
     async def _run_review(self, thread_id: str) -> None:
         try:
@@ -464,6 +476,7 @@ class HomunculaRuntime:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._review_tasks.clear()
+        self._review_by_thread.clear()
 
     def autonomy_paused(self) -> bool:
         return self.db.setting("runtime.paused", "0") == "1"
