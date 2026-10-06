@@ -507,6 +507,26 @@ def create_app(
         except KeyError:
             raise HTTPException(status_code=404, detail="Memory not found") from None
 
+    @app.get("/evidence/receipts")
+    async def evidence_receipts(
+        responsibility_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        return runtime.evidence.list_read_receipts(
+            responsibility_id=responsibility_id,
+            limit=limit,
+        )
+
+    @app.get("/evidence/receipts/{receipt_id}")
+    async def evidence_receipt_get(receipt_id: str) -> dict[str, Any]:
+        try:
+            return runtime.evidence.get_read_receipt(receipt_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail="Evidence receipt not found",
+            ) from None
+
     @app.post("/evidence/observations")
     async def evidence_capture(
         request: EvidenceObservationRequest,
