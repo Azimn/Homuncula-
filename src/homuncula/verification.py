@@ -39,6 +39,16 @@ class VerificationStore:
     ) -> dict[str, Any]:
         argv = [str(part) for part in result.get("argv", [])]
         returncode = int(result.get("returncode", -1))
+        timed_out = bool(result.get("timed_out"))
+        status = "timed_out" if timed_out else ("passed" if returncode == 0 else "failed")
+
+        stdout = str(result.get("stdout", ""))
+        stderr = str(result.get("stderr", ""))
+        if result.get("stdout_truncated"):
+            stdout = "[captured output truncated]\n" + stdout
+        if result.get("stderr_truncated"):
+            stderr = "[captured output truncated]\n" + stderr
+
         record_id = "verify_" + uuid.uuid4().hex
         self.db.execute(
             """
@@ -54,10 +64,10 @@ class VerificationStore:
                 classify_command(argv),
                 self.db.json(argv),
                 str(result.get("cwd", ".")),
-                "passed" if returncode == 0 else "failed",
+                status,
                 returncode,
-                redact_text(str(result.get("stdout", ""))[-4000:]),
-                redact_text(str(result.get("stderr", ""))[-4000:]),
+                redact_text(stdout[-4000:]),
+                redact_text(stderr[-4000:]),
                 now_iso(),
             ),
         )
@@ -110,5 +120,5 @@ class VerificationStore:
         return {
             "latest_by_kind": latest_by_kind,
             "total": len(rows),
-            "has_failed": any(row["status"] == "failed" for row in rows),
+            "has_failed": any(row["status"] != "passed" for row in rows),
         }
