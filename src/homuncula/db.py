@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import collections.abc
+import hashlib
 import json
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-SCHEMA = """
+BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -220,6 +223,38 @@ CREATE TABLE IF NOT EXISTS verification_events (
 CREATE INDEX IF NOT EXISTS idx_verification_responsibility_time
 ON verification_events(responsibility_id, created_at);
 
+"""
+
+MIGRATION_LEDGER_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    checksum TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+);
+"""
+
+
+class DatabaseMigrationError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class Migration:
+    version: int
+    name: str
+    sql: str
+
+    @property
+    def checksum(self) -> str:
+        return hashlib.sha256(self.sql.strip().encode("utf-8")).hexdigest()
+
+
+BASELINE_VERSION = 1
+BASELINE_NAME = "v0.2-baseline"
+BASELINE_CHECKSUM = hashlib.sha256(BASE_SCHEMA.strip().encode("utf-8")).hexdigest()
+
+EVIDENCE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS evidence_sources (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -314,6 +349,31 @@ CREATE INDEX IF NOT EXISTS idx_evidence_reviews_dossier_round
 ON evidence_reviews(dossier_id, round_id, created_at);
 """
 
+MIGRATIONS = (
+    Migration(
+        version=2,
+        name="epistemic-evidence-and-read-receipts",
+        sql=EVIDENCE_SCHEMA,
+    ),
+)
+CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version
+
+
+def _migration_statements(script: str) -> list[str]:
+    statements: list[str] = []
+    buffer = ""
+    for line in script.splitlines():
+        buffer += line + "\n"
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                statements.append(statement)
+            buffer = ""
+    if buffer.strip():
+        raise DatabaseMigrationError("Migration SQL contains an incomplete statement")
+    return statements
+
+
 class Database:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -329,43 +389,182 @@ class Database:
 
     def initialize(self) -> None:
         with self.connect() as conn:
-            conn.executescript(SCHEMA)
-            try:
-                conn.executescript(
-                    """
-                    CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts
-                    USING fts5(content, source, content='memories', content_rowid='rowid');
+            conn.executescript(BASE_SCHEMA)
+            conn.executescript(MIGRATION_LEDGER_SCHEMA)
+            self._ensure_migration_baseline(conn)
+            self._validate_migration_ledger(conn)
+            self._apply_pending_migrations(conn)
+            self._initialize_fts(conn)
 
-                    CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-                      INSERT INTO memory_fts(rowid, content, source)
-                      VALUES (new.rowid, new.content, new.source);
-                    END;
+    def _ensure_migration_baseline(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            "SELECT COUNT(*) AS count FROM schema_migrations"
+        ).fetchone()
+        if row and int(row["count"]) == 0:
+            conn.execute(
+                """
+                INSERT INTO schema_migrations
+                (version, name, checksum, applied_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    BASELINE_VERSION,
+                    BASELINE_NAME,
+                    BASELINE_CHECKSUM,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            conn.commit()
 
-                    CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-                      INSERT INTO memory_fts(memory_fts, rowid, content, source)
-                      VALUES ('delete', old.rowid, old.content, old.source);
-                    END;
+    def _known_migrations(self) -> dict[int, tuple[str, str]]:
+        known = {
+            BASELINE_VERSION: (BASELINE_NAME, BASELINE_CHECKSUM),
+        }
+        for migration in MIGRATIONS:
+            known[migration.version] = (migration.name, migration.checksum)
+        return known
 
-                    CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-                      INSERT INTO memory_fts(memory_fts, rowid, content, source)
-                      VALUES ('delete', old.rowid, old.content, old.source);
-                      INSERT INTO memory_fts(rowid, content, source)
-                      VALUES (new.rowid, new.content, new.source);
-                    END;
-                    """
+    def _validate_migration_ledger(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            SELECT version, name, checksum
+            FROM schema_migrations
+            ORDER BY version
+            """
+        ).fetchall()
+        known = self._known_migrations()
+        versions = [int(row["version"]) for row in rows]
+        if not versions:
+            raise DatabaseMigrationError("Database migration baseline is missing")
+        if versions[-1] > CURRENT_SCHEMA_VERSION:
+            raise DatabaseMigrationError(
+                "Database schema is newer than this Homuncula build"
+            )
+        expected_prefix = list(range(BASELINE_VERSION, versions[-1] + 1))
+        if versions != expected_prefix:
+            raise DatabaseMigrationError(
+                "Database migration ledger has missing or out-of-order versions"
+            )
+        for row in rows:
+            version = int(row["version"])
+            expected = known.get(version)
+            if expected is None:
+                raise DatabaseMigrationError(
+                    f"Database contains unknown migration version {version}"
                 )
-                conn.execute(
-                    """
-                    INSERT INTO memory_fts(rowid, content, source)
-                    SELECT m.rowid, m.content, m.source
-                    FROM memories m
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM memory_fts f WHERE f.rowid = m.rowid
-                    )
-                    """
+            expected_name, expected_checksum = expected
+            if row["name"] != expected_name or row["checksum"] != expected_checksum:
+                raise DatabaseMigrationError(
+                    f"Migration {version} does not match this Homuncula build"
                 )
-            except sqlite3.OperationalError:
-                pass
+
+    def _apply_pending_migrations(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            "SELECT MAX(version) AS version FROM schema_migrations"
+        ).fetchone()
+        current = int(row["version"]) if row and row["version"] is not None else 0
+        for migration in MIGRATIONS:
+            if migration.version <= current:
+                continue
+            self._apply_migration(conn, migration)
+            current = migration.version
+
+    def _apply_migration(
+        self,
+        conn: sqlite3.Connection,
+        migration: Migration,
+    ) -> None:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            for statement in _migration_statements(migration.sql):
+                conn.execute(statement)
+            conn.execute(
+                """
+                INSERT INTO schema_migrations
+                (version, name, checksum, applied_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    migration.version,
+                    migration.name,
+                    migration.checksum,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            raise DatabaseMigrationError(
+                f"Migration {migration.version} ({migration.name}) failed"
+            ) from exc
+
+    def _initialize_fts(self, conn: sqlite3.Connection) -> None:
+        try:
+            conn.executescript(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts
+                USING fts5(content, source, content='memories', content_rowid='rowid');
+
+                CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+                  INSERT INTO memory_fts(rowid, content, source)
+                  VALUES (new.rowid, new.content, new.source);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+                  INSERT INTO memory_fts(memory_fts, rowid, content, source)
+                  VALUES ('delete', old.rowid, old.content, old.source);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+                  INSERT INTO memory_fts(memory_fts, rowid, content, source)
+                  VALUES ('delete', old.rowid, old.content, old.source);
+                  INSERT INTO memory_fts(rowid, content, source)
+                  VALUES (new.rowid, new.content, new.source);
+                END;
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO memory_fts(rowid, content, source)
+                SELECT m.rowid, m.content, m.source
+                FROM memories m
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM memory_fts f WHERE f.rowid = m.rowid
+                )
+                """
+            )
+        except sqlite3.OperationalError:
+            pass
+
+    def schema_status(self) -> dict[str, Any]:
+        with self.connect() as conn:
+            exists = conn.execute(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'schema_migrations'
+                """
+            ).fetchone()
+            if not exists:
+                return {
+                    "current_version": 0,
+                    "target_version": CURRENT_SCHEMA_VERSION,
+                    "applied": [],
+                }
+            rows = conn.execute(
+                """
+                SELECT version, name, checksum, applied_at
+                FROM schema_migrations
+                ORDER BY version
+                """
+            ).fetchall()
+        applied = [dict(row) for row in rows]
+        current = int(applied[-1]["version"]) if applied else 0
+        return {
+            "current_version": current,
+            "target_version": CURRENT_SCHEMA_VERSION,
+            "applied": applied,
+        }
 
     @contextmanager
     def transaction(
