@@ -390,6 +390,19 @@ function App() {
     }
   }
 
+  async function restartHost(): Promise<void> {
+    setBusy(true);
+    setBackendReady(false);
+    try {
+      await window.homuncula.restartHost();
+      setError("Local host restarted. Health checks will reconnect automatically.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function toggleAutonomy(): Promise<void> {
     setBusy(true);
     try {
@@ -589,7 +602,16 @@ function App() {
             Autonomous wakes are paused. Direct conversation and inspection still work.
           </div>
         )}
-        {error && <div className="error-banner">{error}</div>}
+        {error && (
+          <div className="error-banner">
+            <span>{error}</span>
+            {!backendReady && (
+              <button className="ghost" disabled={busy} onClick={() => void restartHost()} type="button">
+                Restart host
+              </button>
+            )}
+          </div>
+        )}
 
         {view === "home" && (
           <>
