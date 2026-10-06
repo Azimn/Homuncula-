@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from .auth import redact_text
 from .db import Database
 
 
@@ -55,8 +56,8 @@ class VerificationStore:
                 str(result.get("cwd", ".")),
                 "passed" if returncode == 0 else "failed",
                 returncode,
-                str(result.get("stdout", ""))[-4000:],
-                str(result.get("stderr", ""))[-4000:],
+                redact_text(str(result.get("stdout", ""))[-4000:]),
+                redact_text(str(result.get("stderr", ""))[-4000:]),
                 now_iso(),
             ),
         )
