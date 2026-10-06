@@ -1,10 +1,31 @@
 # Windows Packaging
 
-Homuncula packages as two local processes inside one desktop product.
+Homuncula is packaged as an Electron desktop plus a frozen local Python runtime.
 
-The Electron application provides the user interface, tray lifecycle, and the narrow IPC bridge. The Python runtime is frozen as agentd.exe with PyInstaller and shipped as an Electron extra resource. The packaged desktop starts that executable with the same per-user owner token used by its IPC bridge.
+Electron owns the user interface, tray lifecycle, native notifications, login startup, microphone capture, audio playback, and the narrow IPC bridge. PyInstaller freezes `agentd.exe`, including Playwright, pywinauto, and sherpa-onnx native components. electron-builder then creates the NSIS installer.
 
-User data is deliberately outside the application install directory under %USERPROFILE%\.homuncula. Uninstalling the application does not delete memory, responsibilities, permissions, browser profile data, or protected secrets.
+## User data
+
+Durable state is outside the install directory under `%USERPROFILE%\.homuncula`. This includes SQLite state, skills, browser profile data, protected secrets, and downloaded voice models. The packaged workspace defaults to `%USERPROFILE%\Homuncula Workspace`.
+
+The NSIS uninstaller does not silently delete user data.
+
+## Voice packaging
+
+The installer contains the sherpa-onnx runtime but not the ASR or TTS model archives. This keeps the base installer smaller and lets voice remain optional.
+
+From the desktop, the user can install:
+
+    sherpa-onnx-whisper-tiny.en
+    kokoro-en-v0_19
+
+Those model packages are downloaded from the official sherpa-onnx GitHub releases into the Homuncula data directory. They survive application upgrades.
+
+The PyInstaller command must retain:
+
+    --collect-all sherpa_onnx
+
+Removing that collection step can produce a package that builds successfully but lacks the native voice runtime at execution time.
 
 ## Local package build
 
@@ -12,10 +33,16 @@ From the repository root on Windows:
 
     .\build-windows.ps1
 
-The script creates the Python environment, runs the Python test suite, freezes agentd.exe, installs desktop dependencies, typechecks the desktop, and creates the NSIS installer under desktop\release.
+The script installs development and package dependencies, runs tests and Ruff, freezes `agentd.exe`, installs desktop dependencies, typechecks Electron, builds the production renderer, and creates the NSIS installer under `desktop\release`.
+
+## CI release gates
+
+A releasable head must pass Python tests and Ruff on Windows and Ubuntu, the real Playwright Chromium integration, Electron TypeScript typecheck and production build, and the Windows PyInstaller plus NSIS package job.
+
+Voice model downloads are intentionally not performed in CI because they are large external release artifacts. Voice model layout, archive containment, authenticated endpoint behavior, and missing-model failure behavior are covered by deterministic tests.
 
 ## Code signing
 
-The release pipeline is compatible with electron-builder signing. Production releases should provide a Windows code-signing certificate through the CI secret store using electron-builder's standard CSC_LINK and CSC_KEY_PASSWORD environment variables. Certificates and passwords must never be committed to this repository.
+electron-builder supports Windows code signing through its standard `CSC_LINK` and `CSC_KEY_PASSWORD` environment variables. Signing credentials must live in the CI secret store and must never be committed.
 
-Unsigned development installers are allowed for local testing. Public releases should be signed.
+Development installers may be unsigned. Public release installers should be signed.
