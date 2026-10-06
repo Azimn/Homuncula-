@@ -88,14 +88,12 @@ TOOLS = [
     ),
     function_tool(
         "evidence_capture",
-        "Persist an externally derived observation with exact source provenance before treating it as durable knowledge.",
+        "Persist evidence from a verified read receipt returned by a Homuncula read tool. The optional excerpt must exactly match receipt text.",
         {
-            "source_kind": {"type": "string"},
-            "source_locator": {"type": "string"},
-            "source_title": {"type": "string"},
-            "content": {"type": "string"},
+            "receipt_id": {"type": "string"},
+            "excerpt": {"type": "string"},
         },
-        required=["source_kind", "source_locator", "content"],
+        required=["receipt_id"],
     ),
     function_tool(
         "evidence_dossier",
