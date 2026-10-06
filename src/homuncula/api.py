@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -89,7 +89,7 @@ class ModelRequest(BaseModel):
 
 
 class VoiceInstallRequest(BaseModel):
-    component: str = Field(pattern="^(asr|tts)$")
+    component: Literal["asr", "tts"]
 
 
 class VoiceSynthesisRequest(BaseModel):
@@ -306,7 +306,7 @@ def create_app(
     @app.post("/voice/install")
     async def voice_install(request: VoiceInstallRequest) -> dict[str, Any]:
         try:
-            return await voice.install(request.component)  # type: ignore[arg-type]
+            return await voice.install(request.component)
         except (httpx.HTTPError, VoiceModelError, OSError, ValueError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
