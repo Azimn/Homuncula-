@@ -198,7 +198,7 @@ Browser mutations use separate capabilities for interaction, upload, and downloa
 
 Files are resolved relative to the configured workspace and paths that escape the workspace are rejected.
 
-Processes are executed with argv arrays and shell execution disabled. Foreground command results are recorded as verification evidence when appropriate. Long-running processes can run in the background and produce process-completion events.
+Processes are executed with argv arrays and shell execution disabled. Agent-launched commands inherit a minimal allowlisted environment rather than the full Homuncula process environment, preventing arbitrary parent secrets from crossing the process boundary by default. Foreground and background stdout/stderr are drained into bounded tail buffers so untrusted commands cannot force unbounded in-memory capture. Foreground timeouts terminate the isolated process tree and are recorded distinctly in verification evidence. Background shutdown terminates active Homuncula-launched process trees before bookkeeping tasks are cancelled. Long-running processes can still produce process-completion or termination events.
 
 Native applications are inspected through Windows UI Automation. Homuncula assigns explicit references to accessible controls and treats stale references as errors rather than silently clicking coordinates.
 
@@ -252,7 +252,7 @@ The implementation deliberately avoids inheriting the Hermes fork's multi-agent 
 
 ## Known remaining work
 
-The current system is usable as a local persistent agent foundation and desktop product, but several production layers remain intentionally open. Visual computer-use fallback, higher-quality optional local embeddings, stronger Windows sandboxing for generated code, connector-specific integrations, production code signing, and broader release hardening remain future work.
+The current system is usable as a local persistent agent foundation and desktop product, but several production layers remain intentionally open. Visual computer-use fallback, higher-quality optional local embeddings, a full Windows security sandbox for generated or untrusted code beyond the current process-containment layer, connector-specific integrations, production code signing, and broader release hardening remain future work.
 
 Those layers are expected to preserve the same contracts: durable state outside the model, local-first operation, explicit authority, inspectable provenance, and no hidden cloud dependency.
 
