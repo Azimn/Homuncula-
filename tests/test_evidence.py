@@ -5,12 +5,16 @@ from pathlib import Path
 
 import pytest
 
+from homuncula.api import create_app
+from homuncula.config import Settings
 from homuncula.context import ContextCompiler
 from homuncula.db import Database
 from homuncula.evidence import EvidenceStore
 from homuncula.evidence_review import EvidenceCouncil
 from homuncula.memory import MemoryStore
 from homuncula.provider import ProviderMessage
+from homuncula.secrets_store import MemorySecretStore
+from homuncula.sentinel import Sentinel
 
 
 class SequenceProvider:
@@ -327,3 +331,161 @@ def test_context_surfaces_unresolved_responsibility_evidence(tmp_path: Path) -> 
     assert evidence_blocks
     assert "[HOLD;" in evidence_blocks[0]
     assert "must not be stated as established fact" in evidence_blocks[0]
+
+
+def _executing_read_action(db: Database, target: str = "source.txt") -> str:
+    sentinel = Sentinel(db)
+    decision = sentinel.request(
+        capability="filesystem.read",
+        target=target,
+        intent="Read evidence fixture",
+        args={"op": "read", "path": target},
+        preview=f"Read {target}",
+        risk="read",
+    )
+    assert decision.status == "approved"
+    sentinel.mark_executing(decision.action_id)
+    return decision.action_id
+
+
+def test_receipt_backed_capture_derives_source_and_rejects_invented_excerpt(
+    tmp_path: Path,
+) -> None:
+    db = Database(tmp_path / "receipt.sqlite3")
+    db.initialize()
+    evidence = EvidenceStore(db)
+    action_id = _executing_read_action(db)
+
+    receipt = evidence.record_read_receipt(
+        action_id=action_id,
+        capability="filesystem.read",
+        source_kind="file",
+        locator="workspace://source.txt",
+        title="source.txt",
+        content="Measured value: 42. Control value: 17.",
+        metadata={"truncated": False},
+    )
+
+    observation = evidence.capture_from_receipt(
+        receipt["id"],
+        excerpt="Measured value: 42.",
+    )
+
+    assert observation["verified_provenance"] is True
+    assert observation["receipt_ids"] == [receipt["id"]]
+    assert observation["source"]["kind"] == "file"
+    assert observation["source"]["locator"] == "workspace://source.txt"
+    assert observation["content"] == "Measured value: 42."
+
+    with pytest.raises(ValueError, match="exactly match"):
+        evidence.capture_from_receipt(
+            receipt["id"],
+            excerpt="Measured value: 9000.",
+        )
+
+    rows = evidence.list_observations()
+    assert len(rows) == 1
+
+
+def test_receipt_listing_is_bounded_but_single_receipt_retains_content(
+    tmp_path: Path,
+) -> None:
+    db = Database(tmp_path / "receipt-list.sqlite3")
+    db.initialize()
+    evidence = EvidenceStore(db)
+    action_id = _executing_read_action(db)
+
+    receipt = evidence.record_read_receipt(
+        action_id=action_id,
+        capability="filesystem.read",
+        source_kind="file",
+        locator="workspace://source.txt",
+        title="source.txt",
+        content="x" * 1000,
+    )
+
+    listed = evidence.list_read_receipts()
+    assert listed[0]["id"] == receipt["id"]
+    assert "content" not in listed[0]
+    assert listed[0]["content_chars"] == 1000
+    assert len(listed[0]["content_preview"]) == 500
+
+    full = evidence.get_read_receipt(receipt["id"])
+    assert len(full["content"]) == 1000
+
+
+@pytest.mark.asyncio
+async def test_real_file_read_mints_receipt_and_agent_capture_is_fail_closed(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "source.txt").write_text(
+        "The source-backed fact is 42.",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        home=tmp_path / "home",
+        db_path=tmp_path / "home" / "agent.sqlite3",
+        workspace=workspace,
+        ollama_base_url="http://127.0.0.1:11434",
+        model="test-model",
+        host="127.0.0.1",
+        port=43900,
+        owner_token="owner-token-value-that-is-long-enough-1234567890",
+        browser_channel="chromium",
+        proactive_enabled=False,
+        context_token_budget=4096,
+    )
+    app = create_app(settings, secret_store=MemorySecretStore())
+    runtime = app.state.runtime
+
+    read_result = await runtime._call_tool(
+        "read_file",
+        {"path": "source.txt"},
+        responsibility_id=None,
+        observation=False,
+    )
+    assert read_result["status"] == "completed"
+    receipt_id = read_result["result"]["evidence_receipt_id"]
+
+    receipt = runtime.evidence.get_read_receipt(receipt_id)
+    assert receipt["capability"] == "filesystem.read"
+    assert receipt["locator"] == "workspace://source.txt"
+    assert receipt["content"] == "The source-backed fact is 42."
+
+    captured = await runtime._call_tool(
+        "evidence_capture",
+        {
+            "receipt_id": receipt_id,
+            "excerpt": "The source-backed fact is 42.",
+        },
+        responsibility_id=None,
+        observation=False,
+    )
+    assert captured["verified_provenance"] is True
+    assert captured["receipt_ids"] == [receipt_id]
+
+    blocked = await runtime._call_tool(
+        "evidence_capture",
+        {
+            "receipt_id": receipt_id,
+            "excerpt": "The source-backed fact is 99.",
+        },
+        responsibility_id=None,
+        observation=False,
+    )
+    assert blocked["status"] == "blocked"
+    assert blocked["reason"] == "invalid_evidence_receipt"
+    assert len(runtime.evidence.list_observations()) == 1
+
+    missing = await runtime._call_tool(
+        "evidence_capture",
+        {"receipt_id": "receipt_does_not_exist"},
+        responsibility_id=None,
+        observation=False,
+    )
+    assert missing["status"] == "blocked"
+    assert missing["reason"] == "invalid_evidence_receipt"
+
+    await runtime.shutdown()
