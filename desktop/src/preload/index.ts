@@ -6,6 +6,18 @@ async function request(path: string, method = "GET", body?: unknown): Promise<an
 
 contextBridge.exposeInMainWorld("homuncula", {
   health: () => request("/health"),
+  voiceStatus: () => request("/voice/status"),
+  installVoice: (component: "asr" | "tts") =>
+    request("/voice/install", "POST", { component }),
+  transcribeVoice: (audio: Uint8Array) =>
+    ipcRenderer.invoke("homuncula:voice-transcribe", audio),
+  synthesizeVoice: (text: string, speaker = 10, speed = 1.0) =>
+    ipcRenderer.invoke("homuncula:voice-synthesize", text, speaker, speed),
+  installOllama: () => ipcRenderer.invoke("homuncula:install-ollama"),
+  restartHost: () => ipcRenderer.invoke("homuncula:restart-backend"),
+  startupSettings: () => ipcRenderer.invoke("homuncula:startup-settings"),
+  setLaunchAtLogin: (enabled: boolean) =>
+    ipcRenderer.invoke("homuncula:set-launch-at-login", enabled),
   state: () => request("/state"),
   pauseAutonomy: () => request("/runtime/pause", "POST"),
   resumeAutonomy: () => request("/runtime/resume", "POST"),
@@ -66,6 +78,12 @@ contextBridge.exposeInMainWorld("homuncula", {
     request("/grants/" + encodeURIComponent(id), "DELETE"),
   processes: () => request("/processes?limit=100"),
   subscriptions: () => request("/subscriptions"),
+  plans: () => request("/plans?limit=100"),
+  skills: () => request("/skills"),
+  verification: () => request("/verification?limit=100"),
+  models: () => request("/models"),
+  selectModel: (model: string) => request("/models/select", "POST", { model }),
+  pullModel: (model: string) => request("/models/pull", "POST", { model }),
   computerStatus: () => request("/computer/status"),
   windows: () => request("/computer/windows")
 });
