@@ -203,6 +203,22 @@ CREATE TABLE IF NOT EXISTS background_processes (
     started_at TEXT NOT NULL,
     completed_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS verification_events (
+    id TEXT PRIMARY KEY,
+    action_id TEXT,
+    responsibility_id TEXT,
+    kind TEXT NOT NULL,
+    command_json TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    status TEXT NOT NULL,
+    returncode INTEGER NOT NULL,
+    stdout_summary TEXT NOT NULL,
+    stderr_summary TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_verification_responsibility_time
+ON verification_events(responsibility_id, created_at);
 """
 
 class Database:
