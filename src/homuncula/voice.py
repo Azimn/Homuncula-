@@ -13,7 +13,6 @@ from typing import Any, Literal
 
 import httpx
 
-
 ASR_MODEL_NAME = "sherpa-onnx-whisper-tiny.en"
 ASR_MODEL_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
