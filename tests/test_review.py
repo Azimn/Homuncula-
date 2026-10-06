@@ -92,3 +92,38 @@ async def test_review_adds_memory_but_skill_requires_approval(tmp_path: Path) ->
     assert pending[0]["capability"] == "skill.install"
     assert pending[0]["status"] == "pending"
     assert skills.list() == []
+
+
+@pytest.mark.asyncio
+async def test_review_deduplicates_pending_skill_proposals(tmp_path: Path) -> None:
+    db = Database(tmp_path / "review-dedup.sqlite3")
+    db.initialize()
+    memory = MemoryStore(db)
+    skills = SkillStore(tmp_path / "skills")
+    sentinel = Sentinel(db)
+    provider = FakeProvider(
+        """
+        {
+          "memories": [],
+          "skill_suggestions": [
+            {
+              "name": "Repository Verification",
+              "description": "Verify repository changes before claiming completion.",
+              "instructions": "Run relevant checks, capture exact results, and report only the verified scope.",
+              "allowed_tools": ["run_process", "read_file"]
+            }
+          ]
+        }
+        """
+    )
+    reviewer = PostTurnReviewer(provider, memory, skills, sentinel)
+    messages = [{"role": "user", "content": "Always verify repository changes."}]
+
+    first = await reviewer.review(messages)
+    second = await reviewer.review(messages)
+
+    assert len(first["skill_actions"]) == 1
+    assert second["skill_actions"] == []
+    pending = sentinel.pending()
+    assert len(pending) == 1
+    assert pending[0]["target"] == "repository-verification"
