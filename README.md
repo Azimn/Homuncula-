@@ -1,97 +1,108 @@
 # Homuncula
 
-Homuncula is a Windows-first, local-first persistent AI agent platform. The goal is not another chat client. It is a user-owned agent runtime that can hold responsibilities, wake itself when something changes, remember work across sessions, use the host computer through governed capabilities, and remain independent of any one language model.
-
-The behavioral target is the proactive experience of systems such as Meta Muse and OpenAI Dots, but with the computer, memory, model, task state, skills, and audit trail under the user's control.
+Homuncula is a Windows-first, local-first persistent AI agent platform. It is designed to provide the proactive desktop experience associated with systems such as Meta Muse and OpenAI Dots while keeping the computer, memory, model, task state, skills, voice, permissions, and audit trail under the user's control.
 
 ## Current status
 
-This repository now contains the first executable foundation: a local FastAPI runtime, SQLite persistence, an Ollama provider, durable responsibilities and wake events, structured memory, a deterministic Sentinel approval boundary, a workspace-scoped Windows host provider, and an iterative tool-using agent loop.
+Homuncula v0.3 is an integrated local desktop agent. The Electron application manages a packaged local `agentd` runtime, persistent responsibilities, durable plans, event-driven wakes, hybrid memory, local skills, governed browser and Windows UI control, native notifications, launch-at-login, local model setup, and fully local voice.
 
-The desktop shell, native Windows UI Automation provider, Playwright browser provider, packaged local inference runtime, hybrid vector memory, and signed installer are the next implementation layers.
+The runtime stores durable state in SQLite and keeps authority outside the language model through Sentinel. Read-only inspection is scoped. Mutations become typed actions that either match an explicit grant or wait for approval. Observation-triggered work cannot silently consume standing mutation grants.
 
 ## Product contract
 
-| Principle | Direction |
+| Principle | Implementation |
 | --- | --- |
-| Local by default | SQLite, localhost services, Ollama or llama.cpp, no cloud runtime requirement |
-| Responsibility over chat | Durable goals and work survive individual turns and restarts |
-| Event driven | Work resumes from schedules and events rather than wasteful polling |
-| Model independent | Persistent state lives outside the rendering model |
-| Governed action | The model proposes capabilities, Sentinel decides whether they may execute |
-| Host native | The Windows PC is the agent's computer, not a remote VM |
-| Inspectable memory | Persistent facts retain source and provenance |
-| Progressive trust | Grants can be scoped by capability, resource, and expiration |
+| Local by default | SQLite, localhost `agentd`, Ollama, local speech recognition, local TTS |
+| Responsibility over chat | Goals, plans, wakes, findings, and verification survive individual turns |
+| Event driven | Filesystem, Git, process, runtime, and scheduled events resume work |
+| Model independent | Persistent state and authority live outside the rendering model |
+| Governed action | Sentinel evaluates typed capability requests before execution |
+| Host native | Playwright and Windows UI Automation operate on the user's PC |
+| Inspectable memory | Hybrid lexical and semantic retrieval preserves provenance and revisions |
+| Progressive trust | Grants are scoped by capability, resource, and optional expiration |
+| Verifiable work | Test, quality, build, and inspection evidence are persisted separately |
+| Private voice | Microphone transcription and Kokoro speech output run locally after model setup |
 
 ## Architecture
 
-The local architecture deliberately separates cognition from authority.
-
-    Desktop application
-            |
-            v
-       agentd runtime
-            |
-       responsibility engine
-        /      |       \
-     memory  planner   wake scheduler
-        \      |       /
-         context compiler
+    Electron desktop
+          |
+          | authenticated IPC
+          v
+       agentd
+          |
+     responsibility engine
+      /    |     |     \
+  memory  plans  events  skills
+      \    |     |     /
+       context compiler
               |
           local model
               |
         tool proposals
               |
-              v
            Sentinel
               |
       governed capabilities
-       /        |        \
-    files    processes   browser/UI
-              |
-         Windows host
+       /      |       |      \
+    files  processes browser Windows UI
 
-The model never becomes the operating-system authority. Read operations are scoped by the computer provider. Mutating and execution capabilities cross Sentinel and either match an explicit grant or become a pending approval.
+Voice is a parallel local interface. The renderer records microphone audio, converts it to 16 kHz mono PCM WAV locally, and sends it through a narrow Electron IPC bridge to authenticated `agentd`. Speech recognition uses sherpa-onnx with Whisper tiny.en int8. Speech output uses sherpa-onnx with Kokoro. Generated WAV audio returns to the renderer for local playback.
 
-See docs/ARCHITECTURE.md for the design contract.
+See `docs/ARCHITECTURE.md` for the trust and persistence contract.
 
-## Quick start
+## Windows quick start
 
-Homuncula currently requires Python 3.11 or newer, Node.js 22 or newer for the desktop development build, and a local Ollama installation.
-
-For the full desktop experience, run this from PowerShell in the repository root:
+For development from the repository:
 
     .\run-desktop.ps1
 
-The launcher creates the Python environment, installs the local runtime, installs the desktop dependencies on first use, starts the Electron application, and lets Electron manage the local agentd process.
+The launcher creates the Python environment, installs the runtime including the local voice engine, installs desktop dependencies when needed, and starts Electron.
 
-For backend-only development:
+For a packaged release, install the generated NSIS executable. Homuncula can detect Ollama, install it through Windows Package Manager when missing, pull a local model, and persist the selected model from inside the app.
 
-    .\run-local.ps1
+Voice models are intentionally not embedded in the installer. The Home screen can download the local speech-recognition model and Kokoro voice model into `%USERPROFILE%\.homuncula\voice\models`. After that initial model download, speech recognition and synthesis do not require an API or subscription.
 
-The runtime listens only on http://127.0.0.1:43900 and expects Ollama at http://127.0.0.1:11434.
+The default language model is `qwen3:8b`, but any installed Ollama chat model can be selected in the desktop.
 
-The default model is qwen3:8b. Override it before launch when needed:
+## Persistent local data
 
-    $env:HOMUNCULA_MODEL = "your-model"
-    .\run-desktop.ps1
+User-owned state lives outside the application install directory under `%USERPROFILE%\.homuncula`. This includes the SQLite database, skills, browser profile, protected secrets, and downloaded voice models. Application upgrades do not replace that directory, and uninstall does not silently remove it.
 
-## Why the host replaces the VM
+The default packaged workspace is `%USERPROFILE%\Homuncula Workspace`.
 
-Homuncula treats the user's Windows host as the agent's world, but does not give a language model unrestricted shell or desktop authority.
+## Local voice
 
-Structured interfaces are preferred over visual clicking. Files use scoped filesystem APIs. Development work uses argv-based process execution with shell disabled. Browser work will use Playwright and accessibility representations. Native Windows applications will use UI Automation. Screenshot and coordinate control are fallback capabilities.
+Speech input is optional. When installed, Whisper tiny.en int8 transcribes microphone audio locally. The renderer uses the browser media APIs only for capture and local decoding, then sends PCM WAV to `agentd` over authenticated local IPC.
 
-Generated or untrusted code will later run inside a restricted Windows execution profile rather than inherit the user's normal desktop authority.
+Speech output is optional. Kokoro generates speech locally with selectable speaker and speed. Spoken replies can be enabled or disabled independently of text chat.
+
+The voice model downloader streams official sherpa-onnx model archives, rejects path traversal and archive links before extraction, and stores models outside the application bundle.
+
+## Host control and safety
+
+Homuncula prefers structured interfaces over screenshot clicking. Workspace files use scoped path APIs. Processes use argv-based execution with no shell. The browser uses Playwright semantic structure and restricts direct navigation to HTTP and HTTPS. Native Windows applications use UI Automation references with stale-reference detection.
+
+Sentinel records externally meaningful actions before execution. Unknown capabilities are denied. Sensitive mutations require approval unless a matching explicit grant exists. Persistent autonomous mutation also requires a durable plan.
+
+A per-turn loop guard stops repeated no-progress tool calls. A separate verification ledger records real command results so the model cannot treat an attempted check as proof of success.
+
+## Proactivity and learning
+
+Responsibilities can wake from concrete future dependencies and local events. Observation mode remains read-only, but it can surface findings or propose actions for approval.
+
+A bounded post-turn reviewer can extract a small number of high-confidence durable memories. Reusable skill suggestions become pending Sentinel actions rather than silent self-modification. Concurrent reviews are coalesced per thread and duplicate pending skill proposals are suppressed.
+
+## Packaging and validation
+
+Windows packaging freezes `agentd` with PyInstaller, including Playwright, pywinauto, and sherpa-onnx native components, then packages Electron through NSIS. CI validates Python and Ruff on Windows and Ubuntu, a real Chromium integration test, Electron typecheck and production build, and the full Windows installer build.
+
+See `docs/PACKAGING.md` for the release path.
 
 ## Project lineage
 
-Homuncula is not a fork of Hermes Agent, Open Dots, MuseDesk, Muse, or Dots. Those systems informed the design, but this codebase keeps its own small interfaces so components can be replaced independently.
-
-Open Dots contributed the central action-gateway idea. The Hermes fork contributed durable-plan and wake concepts. Muse contributed the privilege-separated Sentinel model and host-like computer interaction goal. Dots contributed responsibility-based work, self-selected wakeups, and read-only proactive observation. MuseDesk informed the Windows desktop and packaging direction.
-
-The result is intended to remain small enough to audit and modify.
+Homuncula is not a fork of Hermes Agent, Open Dots, MuseDesk, Muse, or Dots. Those projects informed individual architectural choices. Homuncula keeps its own small interfaces so model providers, memory mechanisms, host-control providers, voice engines, and desktop components can be replaced independently.
 
 ## License
 
-The initial project code is released under the MIT License.
+MIT.
