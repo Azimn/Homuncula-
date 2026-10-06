@@ -85,5 +85,13 @@ contextBridge.exposeInMainWorld("homuncula", {
   selectModel: (model: string) => request("/models/select", "POST", { model }),
   pullModel: (model: string) => request("/models/pull", "POST", { model }),
   computerStatus: () => request("/computer/status"),
-  windows: () => request("/computer/windows")
+  windows: () => request("/computer/windows"),
+  gitStatus: () => request("/computer/git"),
+  gitDiff: (path: string, staged = false) =>
+    request(
+      "/computer/git/diff?path=" +
+        encodeURIComponent(path) +
+        "&staged=" +
+        String(staged)
+    )
 });
