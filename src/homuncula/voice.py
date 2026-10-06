@@ -4,6 +4,7 @@ import asyncio
 import bz2
 import io
 import math
+import os
 import shutil
 import tarfile
 import tempfile
@@ -260,7 +261,7 @@ class VoiceManager:
         if not files:
             raise VoiceUnavailable("Local speech recognition model is not installed")
         sherpa_onnx = self._sherpa()
-        threads = max(1, min(4, math.ceil((__import__("os").cpu_count() or 2) / 2)))
+        threads = max(1, min(4, math.ceil((os.cpu_count() or 2) / 2)))
         self._recognizer = sherpa_onnx.OfflineRecognizer.from_whisper(
             encoder=str(files["encoder"]),
             decoder=str(files["decoder"]),
@@ -291,7 +292,7 @@ class VoiceManager:
                 ),
                 provider="cpu",
                 debug=False,
-                num_threads=max(1, min(4, (__import__("os").cpu_count() or 2) // 2)),
+                num_threads=max(1, min(4, (os.cpu_count() or 2) // 2)),
             ),
             max_num_sentences=1,
         )
