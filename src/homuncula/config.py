@@ -27,6 +27,7 @@ class Settings:
     browser_channel: str
     proactive_enabled: bool
     context_token_budget: int
+    review_enabled: bool = True
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -56,4 +57,5 @@ class Settings:
                 2048,
                 int(os.environ.get("HOMUNCULA_CONTEXT_TOKENS", "12000")),
             ),
+            review_enabled=_bool_env("HOMUNCULA_REVIEW", True),
         )
