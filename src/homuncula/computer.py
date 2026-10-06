@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any
+
+from .process_control import (
+    TailBuffer,
+    drain_stream,
+    isolation_popen_kwargs,
+    sanitized_process_environment,
+    terminate_process_tree,
+)
 
 
 class WorkspaceViolation(PermissionError):
@@ -75,19 +85,64 @@ class WindowsHostComputer:
             raise ValueError("argv must contain at least one non-empty string")
 
         working_dir = self._resolve(cwd)
-        completed = subprocess.run(
+        bounded_timeout = max(1, min(timeout, 1800))
+        stdout_buffer = TailBuffer()
+        stderr_buffer = TailBuffer()
+        started = time.monotonic()
+
+        process = subprocess.Popen(
             argv,
             cwd=working_dir,
             shell=False,
-            capture_output=True,
-            text=True,
-            timeout=max(1, min(timeout, 1800)),
-            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=sanitized_process_environment(),
+            **isolation_popen_kwargs(),
         )
+        stdout_thread = threading.Thread(
+            target=drain_stream,
+            args=(process.stdout, stdout_buffer),
+            name=f"homuncula-stdout-{process.pid}",
+            daemon=True,
+        )
+        stderr_thread = threading.Thread(
+            target=drain_stream,
+            args=(process.stderr, stderr_buffer),
+            name=f"homuncula-stderr-{process.pid}",
+            daemon=True,
+        )
+        stdout_thread.start()
+        stderr_thread.start()
+
+        timed_out = False
+        try:
+            returncode = process.wait(timeout=bounded_timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            terminate_process_tree(process)
+            try:
+                returncode = process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                returncode = process.wait(timeout=5)
+
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
+        stdout = stdout_buffer.result()
+        stderr = stderr_buffer.result()
+
         return {
             "argv": argv,
             "cwd": str(working_dir.relative_to(self.workspace)),
-            "returncode": completed.returncode,
-            "stdout": completed.stdout[-100_000:],
-            "stderr": completed.stderr[-100_000:],
+            "returncode": returncode,
+            "stdout": stdout.text,
+            "stderr": stderr.text,
+            "stdout_bytes": stdout.total_bytes,
+            "stderr_bytes": stderr.total_bytes,
+            "stdout_truncated": stdout.truncated,
+            "stderr_truncated": stderr.truncated,
+            "timed_out": timed_out,
+            "duration_seconds": round(time.monotonic() - started, 3),
+            "environment_policy": "minimal-inherited",
         }
