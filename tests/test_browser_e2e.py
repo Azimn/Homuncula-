@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from homuncula.browser import BrowserNavigationError, BrowserProvider, validate_navigation_url
+from homuncula.browser import (
+    BrowserDownloadError,
+    BrowserNavigationError,
+    BrowserProvider,
+    validate_navigation_url,
+)
 
 HTML = b"""<!doctype html>
 <html>
@@ -85,6 +90,10 @@ async def test_real_playwright_semantic_browser(tmp_path: Path) -> None:
         assert (downloads / "evidence.txt").read_text(encoding="utf-8").startswith(
             "local artifact"
         )
+
+        with pytest.raises(BrowserDownloadError):
+            await browser.download(download_ref, downloads, max_bytes=4)
+        assert not (downloads / "evidence-2.txt").exists()
     finally:
         await browser.close()
         server.shutdown()
