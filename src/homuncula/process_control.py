@@ -103,7 +103,7 @@ def sanitized_process_environment(
 ) -> dict[str, str]:
     """Build a minimal inherited environment without arbitrary parent secrets."""
 
-    source = source or os.environ
+    source = os.environ if source is None else source
     result: dict[str, str] = {}
     for key, value in source.items():
         if key.upper() in PROCESS_ENV_ALLOWLIST:
