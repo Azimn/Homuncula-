@@ -97,20 +97,43 @@ def test_tampered_migration_checksum_is_rejected(tmp_path: Path) -> None:
         db.initialize()
 
 
-def test_database_from_newer_homuncula_build_is_rejected(tmp_path: Path) -> None:
-    db = Database(tmp_path / "future.sqlite3")
-    db.initialize()
-    db.execute(
-        """
-        INSERT INTO schema_migrations
-        (version, name, checksum, applied_at)
-        VALUES (?, 'future', 'future', '2026-10-06T00:00:00+00:00')
-        """,
-        (CURRENT_SCHEMA_VERSION + 1,),
-    )
+def test_database_from_newer_homuncula_build_is_rejected_without_baseline_mutation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "future.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO schema_migrations
+            (version, name, checksum, applied_at)
+            VALUES (?, 'future', 'future', '2026-10-06T00:00:00+00:00')
+            """,
+            (CURRENT_SCHEMA_VERSION + 1,),
+        )
 
+    db = Database(path)
     with pytest.raises(DatabaseMigrationError, match="newer"):
         db.initialize()
+
+    with sqlite3.connect(path) as conn:
+        threads = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'threads'
+            """
+        ).fetchone()
+    assert threads is None
 
 
 def test_failed_migration_rolls_back_schema_and_ledger(tmp_path: Path) -> None:
