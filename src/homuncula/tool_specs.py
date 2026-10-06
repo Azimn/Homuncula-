@@ -310,6 +310,11 @@ TOOLS = [
         required=["reason"],
     ),
     function_tool(
+        "verification_status",
+        "Read durable evidence from test, lint, typecheck, and build commands.",
+        {},
+    ),
+    function_tool(
         "skills_list",
         "List installed local declarative skills.",
         {},
