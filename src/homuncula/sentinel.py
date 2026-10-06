@@ -39,6 +39,7 @@ class Sentinel:
             "plan.fail",
             "skill.list",
             "skill.read",
+            "verification.read",
         }
     )
 
