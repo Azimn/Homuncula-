@@ -191,7 +191,14 @@ class EvidenceStore:
                 """,
                 (bounded,),
             )
-        return [self._decode_receipt(row) for row in rows]
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = self._decode_receipt(row)
+            content = item.pop("content")
+            item["content_preview"] = content[:500]
+            item["content_chars"] = len(content)
+            result.append(item)
+        return result
 
     def capture_from_receipt(
         self,
