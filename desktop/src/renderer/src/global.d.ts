@@ -4,6 +4,14 @@ declare global {
   interface Window {
     homuncula: {
       health: () => Promise<any>;
+      voiceStatus: () => Promise<any>;
+      installVoice: (component: "asr" | "tts") => Promise<any>;
+      transcribeVoice: (audio: Uint8Array) => Promise<any>;
+      synthesizeVoice: (
+        text: string,
+        speaker?: number,
+        speed?: number
+      ) => Promise<Uint8Array>;
       installOllama: () => Promise<any>;
       restartHost: () => Promise<any>;
       startupSettings: () => Promise<{ supported: boolean; openAtLogin: boolean }>;
