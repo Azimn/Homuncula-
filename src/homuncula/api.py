@@ -268,6 +268,7 @@ def create_app(
             "version": "0.2.0",
             "workspace": str(settings.workspace),
             "database": str(settings.db_path),
+            "schema": db.schema_status(),
             "proactive_enabled": settings.proactive_enabled,
             "review_enabled": settings.review_enabled,
             "browser_channel": settings.browser_channel,
