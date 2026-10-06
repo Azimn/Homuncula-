@@ -14,7 +14,7 @@ import { electronApp, is } from "@electron-toolkit/utils";
 
 const API_BASE = "http://127.0.0.1:43900";
 const ALLOWED_API_PATH =
-  /^\/(health|state|runtime|threads|responsibilities|actions|grants|activity|memory|findings|processes|subscriptions|secrets|computer|plans|skills|verification|models)(\/|\?|$)/;
+  /^\/(health|state|runtime|threads|responsibilities|actions|grants|activity|memory|findings|processes|subscriptions|secrets|computer|plans|skills|verification|models|voice)(\/|\?|$)/;
 
 let backend: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
@@ -280,6 +280,41 @@ function setLaunchAtLogin(enabled: boolean): { supported: boolean; openAtLogin: 
 }
 
 function installApiBridge(): void {
+  ipcMain.handle("homuncula:voice-transcribe", async (_event, audio: Uint8Array) => {
+    const response = await fetch(API_BASE + "/voice/transcribe", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + ownerToken,
+        "Content-Type": "audio/wav"
+      },
+      body: Buffer.from(audio)
+    });
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || "Local transcription failed");
+    }
+    return response.json();
+  });
+
+  ipcMain.handle(
+    "homuncula:voice-synthesize",
+    async (_event, text: string, speaker: number = 10, speed: number = 1.0) => {
+      const response = await fetch(API_BASE + "/voice/synthesize", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + ownerToken,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ text, speaker, speed })
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Local speech synthesis failed");
+      }
+      return new Uint8Array(await response.arrayBuffer());
+    }
+  );
+
   ipcMain.handle("homuncula:install-ollama", async () => installOllama());
 
   ipcMain.handle("homuncula:restart-backend", async () => {
