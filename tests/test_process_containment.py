@@ -14,9 +14,9 @@ from homuncula.processes import BackgroundProcessManager
 
 
 async def _noop_wake(
-    responsibility_id: str,
-    reason: str,
-    payload: dict,
+    _responsibility_id: str,
+    _reason: str,
+    _payload: dict,
 ) -> None:
     return None
 
