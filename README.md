@@ -8,7 +8,7 @@ Homuncula is not a chat wrapper. Chat is one interface into a durable local runt
 
 Homuncula v0.2 is an integrated working local agent rather than a design-only foundation.
 
-The repository contains a FastAPI agent runtime, SQLite system of record, authenticated Electron desktop, Ollama model provider, durable responsibilities and plans, persisted wake events, filesystem and Git event observation, background process events, hybrid lexical and semantic memory, memory revision history, local reusable skills, bounded post-turn review, verification evidence, per-turn loop guardrails, native Windows UI Automation, a governed Playwright browser, workspace-scoped file and process tools, Windows DPAPI secret storage, native notifications, tray persistence, launch-at-login support, first-run Ollama and model setup, and a deterministic Sentinel approval boundary.
+The repository contains a FastAPI agent runtime, SQLite system of record, authenticated Electron desktop, Ollama model provider, durable responsibilities and plans, persisted wake events, filesystem and Git event observation, background process events, hybrid lexical and semantic memory, memory revision history, provenance-preserving evidence dossiers, adversarial local evidence review, local reusable skills, bounded post-turn review, verification evidence, per-turn loop guardrails, native Windows UI Automation, a governed Playwright browser, workspace-scoped file and process tools, Windows DPAPI secret storage, native notifications, tray persistence, launch-at-login support, first-run Ollama and model setup, and a deterministic Sentinel approval boundary.
 
 CI validates Python on Windows and Ubuntu, a real Chromium interaction and download harness, Electron typecheck and production build, and a full Windows PyInstaller plus NSIS package build. The packaged installer is generated as a CI artifact. Public code signing is supported by the release design but requires a signing certificate that is not stored in this repository.
 
@@ -23,6 +23,7 @@ CI validates Python on Windows and Ubuntu, a real Chromium interaction and downl
 | Governed action | Sentinel records and evaluates typed capability requests before execution |
 | Host native | Windows filesystem, process APIs, UI Automation, Playwright on the host |
 | Inspectable memory | Source, scope, confidence, semantic index, lexical index, revisions |
+| Evidence before belief | External claims retain source observations, review verdicts, unknowns, and promotion provenance |
 | Progressive trust | Capability grants can be scoped by target and expiration |
 | Verifiable execution | Command checks are recorded separately from ordinary activity |
 | Local learning | Post-turn review may save durable memory and may only propose new skills |
@@ -146,6 +147,27 @@ A bounded post-turn reviewer can inspect a pruned recent conversation after ordi
 
 Local skills live under the Homuncula data directory and contain reusable instructions plus declared tool guidance. Sentinel remains the security authority even when a skill recommends particular tools.
 
+## Evidence and epistemic gating
+
+Homuncula separates externally observed information from durable belief. Browser text, documents, files, terminal output, APIs, and similar external sources can be captured as provenance-bearing observations with a source kind, exact redacted locator, timestamp, content hash, bounded metadata, and optional responsibility scope.
+
+A claim is evaluated through an evidence dossier rather than written directly into durable memory. A dossier references one to twenty captured observations and begins in HOLD. HOLD means unresolved, not false.
+
+The local evidence council runs four role-specific reviews against the same bounded packet and exposes no tools to the reviewers:
+
+    Scout       relevance and signal quality
+    Verifier    evidential support and scope discipline
+    Skeptic     contradictions and alternate explanations
+    Integrator  readiness for durable knowledge
+
+Review outputs are schema checked. A PASS must cite observation IDs that were actually present in the packet. Invented evidence IDs, malformed output, an unavailable local model, a missing reviewer, or another invalid review condition fails closed to HOLD.
+
+Final PASS, HOLD, or REJECT is computed deterministically from stored reviewer records. The language model does not decide the aggregation rule.
+
+Only a PASS dossier can promote its exact reviewed claim into durable memory. The resulting memory stores the dossier ID, observation IDs, and review round, while the dossier stores the promoted memory ID. Repeated promotion returns the existing memory instead of creating a duplicate.
+
+The runtime exposes evidence capture, dossier creation, review, status, and promotion as internal tools. The authenticated local API exposes observation and dossier inspection plus explicit review. A dedicated desktop dossier browser is not yet implemented.
+
 ## Browser
 
 The browser provider uses Playwright with a local persistent profile and semantic page representations. It exposes text, ARIA structure, and stable referenced controls before any visual fallback is considered.
@@ -212,7 +234,7 @@ The implementation deliberately avoids inheriting the Hermes fork's multi-agent 
 
 ## Known remaining work
 
-The current system is usable as a local persistent agent foundation and desktop product, but several production layers remain intentionally open. Visual computer-use fallback, higher-quality optional local embeddings, fully local voice input and output, stronger Windows sandboxing for generated code, connector-specific integrations, production code signing, database migration tooling beyond additive schema initialization, and broader release hardening remain future work.
+The current system is usable as a local persistent agent foundation and desktop product, but several production layers remain intentionally open. Visual computer-use fallback, higher-quality optional local embeddings, a dedicated desktop evidence-dossier browser, stronger automatic source capture from read tools, fully local voice input and output, stronger Windows sandboxing for generated code, connector-specific integrations, production code signing, database migration tooling beyond additive schema initialization, and broader release hardening remain future work.
 
 Those layers are expected to preserve the same contracts: durable state outside the model, local-first operation, explicit authority, inspectable provenance, and no hidden cloud dependency.
 
