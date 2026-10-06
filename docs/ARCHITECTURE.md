@@ -28,6 +28,10 @@ Windows connector-style credentials are stored through DPAPI behind opaque refer
 
 SQLite is the system of record for application state.
 
+Schema evolution is explicit and versioned. The durable `schema_migrations` ledger stores each applied version, stable migration name, checksum, and application time. Homuncula validates the ledger before applying ordinary baseline initialization when a ledger already exists, so a database created by a newer build is refused before the older runtime can mutate its baseline schema.
+
+The v0.2 relational model is baseline version 1. Later schema changes are ordered migrations. Migration definitions must be contiguous, uniquely named, and checksum-stable. Each pending migration runs in an immediate transaction and inserts its ledger row only after every statement succeeds. Failure rolls back the migration. Ledger gaps, checksum drift, unknown versions, and future-version databases are startup errors rather than best-effort repair cases.
+
 The schema contains settings, threads, messages, responsibilities, wakes, memories, memory revisions, memory vectors, plans, plan steps, grants, actions, activities, event subscriptions, event receipts, findings, background processes, verification events, evidence sources, verified read receipts, evidence observations, observation-receipt links, evidence dossiers, dossier-observation links, and evidence reviews.
 
 The filesystem also stores the browser profile, local skills, protected secret blobs, and application data that is inappropriate for relational storage.
