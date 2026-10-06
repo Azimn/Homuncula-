@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import os
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from .auth import token_matches
@@ -19,7 +20,7 @@ from .events import EventHub, WorkspaceEventSource
 from .memory import MemoryStore
 from .plans import PlanStore
 from .processes import BackgroundProcessManager
-from .provider import OllamaProvider
+from .provider import OllamaProvider, ProviderError
 from .runtime import HomunculaRuntime, WakeScheduler
 from .secrets_store import (
     MemorySecretStore,
@@ -29,6 +30,7 @@ from .secrets_store import (
 )
 from .sentinel import Sentinel
 from .skills import SkillStore
+from .voice import VoiceManager, VoiceModelError, VoiceUnavailable
 from .windows_ui import WindowsUIProvider
 
 
@@ -82,6 +84,20 @@ class SecretRequest(BaseModel):
     value: str = Field(min_length=1)
 
 
+class ModelRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
+class VoiceInstallRequest(BaseModel):
+    component: Literal["asr", "tts"]
+
+
+class VoiceSynthesisRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=12000)
+    speaker: int = Field(default=10, ge=0, le=10)
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -94,7 +110,8 @@ def create_app(
     db.initialize()
     memory = MemoryStore(db)
     sentinel = Sentinel(db)
-    provider = OllamaProvider(settings.ollama_base_url, settings.model)
+    selected_model = db.setting("runtime.model", settings.model) or settings.model
+    provider = OllamaProvider(settings.ollama_base_url, selected_model)
     computer = WindowsHostComputer(settings.workspace)
     plans = PlanStore(db)
     skills = SkillStore(settings.home / "skills")
@@ -112,6 +129,7 @@ def create_app(
         in {"1", "true", "yes"},
     )
     windows_ui = windows_ui or WindowsUIProvider()
+    voice = VoiceManager(settings.home)
 
     runtime_holder: dict[str, HomunculaRuntime] = {}
 
@@ -145,6 +163,7 @@ def create_app(
         processes,
         plans,
         skills,
+        review_enabled=settings.review_enabled,
     )
     runtime_holder["runtime"] = runtime
     scheduler = WakeScheduler(db, runtime.run_responsibility)
@@ -183,6 +202,7 @@ def create_app(
         finally:
             workspace_events.stop()
             scheduler.stop()
+            await runtime.shutdown()
             await processes.shutdown()
             await browser.close()
             await scheduler_task
@@ -201,6 +221,7 @@ def create_app(
     app.state.runtime = runtime
     app.state.events = event_hub
     app.state.secrets = secret_store
+    app.state.voice = voice
 
     @app.middleware("http")
     async def owner_auth(request: Request, call_next):
@@ -231,10 +252,88 @@ def create_app(
             "workspace": str(settings.workspace),
             "database": str(settings.db_path),
             "proactive_enabled": settings.proactive_enabled,
+            "review_enabled": settings.review_enabled,
             "browser_channel": settings.browser_channel,
             "secret_store": type(secret_store).__name__,
             "provider": await provider.health(),
         }
+
+    @app.get("/models")
+    async def models() -> dict[str, Any]:
+        try:
+            available = await provider.list_models()
+            return {
+                "ok": True,
+                "selected": provider.model,
+                "available": available,
+            }
+        except (httpx.HTTPError, ValueError, ProviderError) as exc:
+            return {
+                "ok": False,
+                "selected": provider.model,
+                "available": [],
+                "error": str(exc),
+            }
+
+    @app.post("/models/select")
+    async def select_model(request: ModelRequest) -> dict[str, str]:
+        try:
+            available = await provider.list_models()
+            if request.model not in available:
+                raise HTTPException(status_code=404, detail="Model is not installed")
+            selected = provider.select_model(request.model)
+            db.set_setting("runtime.model", selected)
+            return {"model": selected}
+        except HTTPException:
+            raise
+        except (httpx.HTTPError, ValueError, ProviderError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/models/pull")
+    async def pull_model(request: ModelRequest) -> dict[str, Any]:
+        try:
+            result = await provider.pull_model(request.model)
+            selected = provider.select_model(request.model)
+            db.set_setting("runtime.model", selected)
+            return {"model": selected, "result": result}
+        except (httpx.HTTPError, ValueError, ProviderError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/voice/status")
+    async def voice_status() -> dict[str, Any]:
+        return voice.status()
+
+    @app.post("/voice/install")
+    async def voice_install(request: VoiceInstallRequest) -> dict[str, Any]:
+        try:
+            return await voice.install(request.component)
+        except (httpx.HTTPError, VoiceModelError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/voice/transcribe")
+    async def voice_transcribe(request: Request) -> dict[str, Any]:
+        raw = await request.body()
+        if not raw:
+            raise HTTPException(status_code=400, detail="WAV audio is required")
+        if len(raw) > 25 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Voice input is too large")
+        try:
+            return await asyncio.to_thread(voice.transcribe_wav, raw)
+        except (VoiceUnavailable, VoiceModelError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/voice/synthesize")
+    async def voice_synthesize(request: VoiceSynthesisRequest) -> Response:
+        try:
+            wav = await asyncio.to_thread(
+                voice.synthesize,
+                request.text,
+                speaker=request.speaker,
+                speed=request.speed,
+            )
+            return Response(content=wav, media_type="audio/wav")
+        except (VoiceUnavailable, VoiceModelError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/state")
     async def state() -> dict[str, Any]:
@@ -285,7 +384,7 @@ def create_app(
             return await runtime.chat(thread_id, request.content)
         except KeyError:
             raise HTTPException(status_code=404, detail="Thread not found") from None
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, ProviderError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.post("/responsibilities")
@@ -429,6 +528,16 @@ def create_app(
             skills.remove(skill_name)
         except KeyError:
             raise HTTPException(status_code=404, detail="Skill not found") from None
+
+    @app.get("/verification")
+    async def verification_list(
+        responsibility_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        return runtime.verification.list(
+            responsibility_id=responsibility_id,
+            limit=limit,
+        )
 
     @app.get("/actions")
     async def actions(status: str | None = None) -> list[dict[str, Any]]:
