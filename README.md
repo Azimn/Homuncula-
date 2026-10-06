@@ -238,7 +238,7 @@ The implementation deliberately avoids inheriting the Hermes fork's multi-agent 
 
 ## Known remaining work
 
-The current system is usable as a local persistent agent foundation and desktop product, but several production layers remain intentionally open. Visual computer-use fallback, higher-quality optional local embeddings, a dedicated desktop evidence-dossier browser, stronger automatic source capture from read tools, fully local voice input and output, stronger Windows sandboxing for generated code, connector-specific integrations, production code signing, database migration tooling beyond additive schema initialization, and broader release hardening remain future work.
+The current system is usable as a local persistent agent foundation and desktop product, but several production layers remain intentionally open. Visual computer-use fallback, higher-quality optional local embeddings, a dedicated desktop evidence-dossier browser, fully local voice input and output, stronger Windows sandboxing for generated code, connector-specific integrations, production code signing, database migration tooling beyond additive schema initialization, and broader release hardening remain future work.
 
 Those layers are expected to preserve the same contracts: durable state outside the model, local-first operation, explicit authority, inspectable provenance, and no hidden cloud dependency.
 
