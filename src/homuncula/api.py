@@ -430,6 +430,16 @@ def create_app(
         except KeyError:
             raise HTTPException(status_code=404, detail="Skill not found") from None
 
+    @app.get("/verification")
+    async def verification_list(
+        responsibility_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        return runtime.verification.list(
+            responsibility_id=responsibility_id,
+            limit=limit,
+        )
+
     @app.get("/actions")
     async def actions(status: str | None = None) -> list[dict[str, Any]]:
         if status:
