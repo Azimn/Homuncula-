@@ -28,7 +28,7 @@ Windows connector-style credentials are stored through DPAPI behind opaque refer
 
 SQLite is the system of record for application state.
 
-The schema contains settings, threads, messages, responsibilities, wakes, memories, memory revisions, memory vectors, plans, plan steps, grants, actions, activities, event subscriptions, event receipts, findings, background processes, and verification events.
+The schema contains settings, threads, messages, responsibilities, wakes, memories, memory revisions, memory vectors, plans, plan steps, grants, actions, activities, event subscriptions, event receipts, findings, background processes, verification events, evidence sources, evidence observations, evidence dossiers, dossier-observation links, and evidence reviews.
 
 The filesystem also stores the browser profile, local skills, protected secret blobs, and application data that is inappropriate for relational storage.
 
@@ -58,11 +58,29 @@ Retrieval combines semantic similarity, lexical rank, confidence, and prior use.
 
 Corrections create memory revision records before updating the authoritative memory value.
 
+## Epistemic evidence layer
+
+External observation and durable memory are separate state transitions.
+
+Evidence sources identify where information came from by source kind and redacted locator. Evidence observations preserve bounded redacted content, a content hash, observation time, responsibility scope, and metadata. Duplicate content from the same source resolves to the existing observation.
+
+Evidence dossiers bind one claim to one or more observation IDs. Creation performs deterministic structural prechecks and always starts the dossier in HOLD. The dossier retains confidence, declared unknowns, current reviewer unknowns, its latest review round, and any memory produced by successful promotion.
+
+The evidence council contains four local review roles: Scout, Verifier, Skeptic, and Integrator. Every role receives the same bounded evidence packet with no tools. Packet content is explicitly untrusted data.
+
+Reviewer output must conform to the verdict schema, and every cited observation ID must exist in the packet. A PASS review with no packet evidence is invalid. Provider failure, malformed JSON, invented evidence IDs, missing roles, or any other invalid reviewer output causes the aggregate result to remain HOLD.
+
+Aggregation is deterministic and outside the model. A dossier passes only when Verifier, Skeptic, and Integrator all pass and every reviewer record is valid. It rejects when the critical reviewers provide sufficient independent rejection. Other combinations remain HOLD.
+
+Only PASS dossiers can be promoted to durable memory. Promotion uses the exact reviewed claim, records the dossier and observation provenance in memory metadata, and links the dossier to the resulting memory so promotion is idempotent.
+
+HOLD means unresolved. It is deliberately not treated as false. REJECT means the current evidence materially contradicts the claim. Neither state may be promoted through the evidence path.
+
 ## Context compiler
 
 The context compiler operates under a configurable token budget.
 
-It can assemble relevant durable memory, active responsibility state, active plan state, recent operational activity, matching local skills, verification evidence, and recent conversation.
+It can assemble relevant durable memory, active responsibility state, active plan state, unresolved or accepted evidence dossiers, recent operational activity, matching local skills, verification evidence, and recent conversation.
 
 This compiler, rather than the rendering model, decides which durable state enters a turn.
 
