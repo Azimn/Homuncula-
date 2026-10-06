@@ -61,6 +61,10 @@ declare global {
       plans: () => Promise<any[]>;
       skills: () => Promise<any[]>;
       verification: () => Promise<any[]>;
+      evidenceDossiers: (status?: string) => Promise<any[]>;
+      evidenceDossier: (id: string) => Promise<any>;
+      evidenceReceipts: () => Promise<any[]>;
+      reviewEvidence: (id: string) => Promise<any>;
       models: () => Promise<any>;
       selectModel: (model: string) => Promise<any>;
       pullModel: (model: string) => Promise<any>;
