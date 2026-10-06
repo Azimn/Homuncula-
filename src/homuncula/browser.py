@@ -18,6 +18,20 @@ class BrowserUnavailable(RuntimeError):
 class BrowserReferenceError(LookupError):
     pass
 
+class BrowserNavigationError(ValueError):
+    pass
+
+def validate_navigation_url(url: str) -> str:
+    candidate = url.strip()
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"}:
+        raise BrowserNavigationError("Browser navigation is limited to HTTP and HTTPS")
+    if not parsed.hostname:
+        raise BrowserNavigationError("Browser navigation requires a valid host")
+    if parsed.username is not None or parsed.password is not None:
+        raise BrowserNavigationError("Credentials are not allowed in browser navigation URLs")
+    return candidate
+
 class BrowserProvider:
     def __init__(
         self,
@@ -76,8 +90,13 @@ class BrowserProvider:
             self._playwright = None
 
     async def navigate(self, url: str) -> dict[str, Any]:
+        safe_url = validate_navigation_url(url)
         page = await self._ensure_page()
-        response = await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+        response = await page.goto(
+            safe_url,
+            wait_until="domcontentloaded",
+            timeout=45_000,
+        )
         return {
             "url": page.url,
             "title": await page.title(),
