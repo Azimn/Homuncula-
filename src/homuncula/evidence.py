@@ -87,6 +87,169 @@ class EvidenceStore:
             raise KeyError(source_id)
         return self._decode_source(row)
 
+    def record_read_receipt(
+        self,
+        *,
+        action_id: str,
+        capability: str,
+        source_kind: str,
+        locator: str,
+        content: str,
+        responsibility_id: str | None = None,
+        title: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self._validate_responsibility(responsibility_id)
+        action = self.db.one(
+            "SELECT id, capability, status FROM actions WHERE id = ?",
+            (action_id,),
+        )
+        if not action:
+            raise KeyError(action_id)
+        if action["capability"] != capability:
+            raise ValueError("Evidence receipt capability does not match its action")
+        if action["status"] not in {"executing", "completed"}:
+            raise ValueError("Evidence receipts require an executing or completed read action")
+
+        existing = self.db.one(
+            "SELECT * FROM evidence_read_receipts WHERE action_id = ?",
+            (action_id,),
+        )
+        if existing:
+            return self._decode_receipt(existing)
+
+        kind = source_kind.strip().lower()
+        safe_locator = redact_text(locator.strip())
+        safe_title = redact_text((title or "").strip())[:500]
+        safe_content = redact_text(content.strip())
+        if not kind or len(kind) > 80:
+            raise ValueError("Evidence receipt source kind must be 1 to 80 characters")
+        if not safe_locator or len(safe_locator) > 4000:
+            raise ValueError("Evidence receipt locator must be 1 to 4000 characters")
+        if not safe_content:
+            raise ValueError("Evidence receipt content cannot be empty")
+        if len(safe_content) > 200_000:
+            safe_content = safe_content[:200_000]
+
+        receipt_id = "receipt_" + uuid.uuid4().hex
+        digest = hashlib.sha256(safe_content.encode("utf-8")).hexdigest()
+        self.db.execute(
+            """
+            INSERT INTO evidence_read_receipts
+            (id, action_id, responsibility_id, capability, source_kind, locator,
+             title, content, content_hash, metadata_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                receipt_id,
+                action_id,
+                responsibility_id,
+                capability,
+                kind,
+                safe_locator,
+                safe_title,
+                safe_content,
+                digest,
+                self.db.json(redact_payload(metadata or {})),
+                now_iso(),
+            ),
+        )
+        return self.get_read_receipt(receipt_id)
+
+    def get_read_receipt(self, receipt_id: str) -> dict[str, Any]:
+        row = self.db.one(
+            "SELECT * FROM evidence_read_receipts WHERE id = ?",
+            (receipt_id,),
+        )
+        if not row:
+            raise KeyError(receipt_id)
+        return self._decode_receipt(row)
+
+    def list_read_receipts(
+        self,
+        *,
+        responsibility_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        bounded = max(1, min(limit, 500))
+        if responsibility_id:
+            rows = self.db.all(
+                """
+                SELECT * FROM evidence_read_receipts
+                WHERE responsibility_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (responsibility_id, bounded),
+            )
+        else:
+            rows = self.db.all(
+                """
+                SELECT * FROM evidence_read_receipts
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (bounded,),
+            )
+        return [self._decode_receipt(row) for row in rows]
+
+    def capture_from_receipt(
+        self,
+        receipt_id: str,
+        *,
+        excerpt: str | None = None,
+        responsibility_id: str | None = None,
+    ) -> dict[str, Any]:
+        receipt = self.get_read_receipt(receipt_id)
+        receipt_responsibility = receipt.get("responsibility_id")
+        if (
+            responsibility_id
+            and receipt_responsibility
+            and receipt_responsibility != responsibility_id
+        ):
+            raise ValueError(
+                "Evidence receipt belongs to a different responsibility"
+            )
+
+        if excerpt is None:
+            text = receipt["content"]
+            if len(text) > 50_000:
+                raise ValueError(
+                    "Receipt content exceeds the observation limit; provide an exact excerpt"
+                )
+        else:
+            text = redact_text(excerpt.strip())
+            if not text:
+                raise ValueError("Evidence excerpt cannot be empty")
+            if text not in receipt["content"]:
+                raise ValueError(
+                    "Evidence excerpt must exactly match text in the verified read receipt"
+                )
+
+        observation = self.capture_observation(
+            source_kind=receipt["source_kind"],
+            source_locator=receipt["locator"],
+            source_title=receipt["title"],
+            content=text,
+            responsibility_id=responsibility_id or receipt_responsibility,
+            metadata={
+                "provenance": "verified_read_receipt",
+                "receipt_id": receipt["id"],
+                "action_id": receipt["action_id"],
+                "capability": receipt["capability"],
+                "receipt_content_hash": receipt["content_hash"],
+            },
+        )
+        self.db.execute(
+            """
+            INSERT OR IGNORE INTO evidence_observation_receipts
+            (observation_id, receipt_id, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (observation["id"], receipt["id"], now_iso()),
+        )
+        return self.get_observation(observation["id"])
+
     def capture_observation(
         self,
         *,
@@ -152,7 +315,19 @@ class EvidenceStore:
         )
         if not row:
             raise KeyError(observation_id)
-        return self._decode_observation(row)
+        item = self._decode_observation(row)
+        receipt_rows = self.db.all(
+            """
+            SELECT receipt_id
+            FROM evidence_observation_receipts
+            WHERE observation_id = ?
+            ORDER BY created_at ASC
+            """,
+            (observation_id,),
+        )
+        item["receipt_ids"] = [entry["receipt_id"] for entry in receipt_rows]
+        item["verified_provenance"] = bool(item["receipt_ids"])
+        return item
 
     def list_observations(
         self,
@@ -186,7 +361,7 @@ class EvidenceStore:
                 """,
                 (bounded,),
             )
-        return [self._decode_observation(row) for row in rows]
+        return [self.get_observation(row["id"]) for row in rows]
 
     def create_dossier(
         self,
@@ -216,9 +391,14 @@ class EvidenceStore:
         observations = [self.get_observation(item) for item in unique_ids]
         distinct_sources = len({item["source"]["id"] for item in observations})
         source_kinds = sorted({item["source"]["kind"] for item in observations})
+        verified_count = sum(
+            1 for item in observations if item.get("verified_provenance")
+        )
         precheck = {
             "eligible_for_review": True,
             "observation_count": len(observations),
+            "verified_observation_count": verified_count,
+            "all_observations_verified": verified_count == len(observations),
             "distinct_source_count": distinct_sources,
             "source_kinds": source_kinds,
             "all_locators_present": all(
@@ -362,6 +542,11 @@ class EvidenceStore:
                         "title": source["title"],
                     },
                     "observed_at": observation["observed_at"],
+                    "verified_provenance": observation.get(
+                        "verified_provenance",
+                        False,
+                    ),
+                    "receipt_ids": observation.get("receipt_ids", []),
                     "content": body,
                 }
             )
@@ -508,6 +693,12 @@ class EvidenceStore:
             (memory_id, now_iso(), dossier_id),
         )
         return self.get_dossier(dossier_id)
+
+    @staticmethod
+    def _decode_receipt(row: dict[str, Any]) -> dict[str, Any]:
+        item = dict(row)
+        item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+        return item
 
     @staticmethod
     def _decode_source(row: dict[str, Any]) -> dict[str, Any]:
