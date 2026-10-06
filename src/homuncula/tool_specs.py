@@ -202,6 +202,17 @@ TOOLS = [
         required=["ref", "path", "intent"],
     ),
     function_tool(
+        "browser_download",
+        "Propose downloading from a referenced browser control into the local workspace.",
+        {
+            "ref": {"type": "string"},
+            "directory": {"type": "string", "default": "downloads"},
+            "max_mb": {"type": "integer", "default": 250, "minimum": 1, "maximum": 2048},
+            "intent": {"type": "string"},
+        },
+        required=["ref", "intent"],
+    ),
+    function_tool(
         "windows_list",
         "List visible native Windows application windows through UI Automation.",
         {"limit": {"type": "integer", "default": 100}},
