@@ -202,6 +202,8 @@ Native applications are inspected through Windows UI Automation. Homuncula assig
 
 Structured interfaces are preferred to pixel clicking. A visual fallback for applications that do not expose adequate accessibility structure remains a future layer.
 
+Git workspace inspection is read-only and scoped to the configured workspace. Homuncula can show branch state, changed files, working-tree statistics, staged statistics, and bounded textual diffs. The inspector invokes Git without a shell and does not expose commit, reset, checkout, push, or other mutation operations.
+
 ## Verification and loop safety
 
 Ordinary activity records what Homuncula did. Verification evidence is separate. Process results are classified as tests, quality checks, builds, inspections, or generic commands and retain exit codes plus bounded redacted output summaries.
@@ -222,7 +224,7 @@ Credentials are stored behind opaque references. On Windows, protected secrets u
 
 ## Desktop surfaces
 
-The desktop exposes conversation, responsibilities, approvals, findings, memory, durable plans, local skills, verification evidence, host status, background processes, Windows application inventory, activity provenance, model setup, permissions, autonomy takeover, host restart, launch-at-login, and tray presence.
+The desktop exposes conversation, responsibilities, approvals, findings, memory, durable plans, local skills, verification evidence, read-only Git workspace changes, host status, background processes, Windows application inventory, activity provenance, model setup, permissions, autonomy takeover, host restart, launch-at-login, and tray presence.
 
 Closing the main window hides Homuncula to the tray instead of terminating its local responsibilities.
 
