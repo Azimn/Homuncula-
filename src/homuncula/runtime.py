@@ -14,13 +14,16 @@ from .computer import WindowsHostComputer
 from .context import ContextCompiler
 from .db import Database
 from .events import EventHub
+from .guardrails import ToolLoopGuard
 from .memory import MemoryStore
 from .plans import PlanStore
 from .processes import BackgroundProcessManager
 from .provider import OllamaProvider
+from .review import PostTurnReviewer
 from .sentinel import Sentinel
 from .skills import SkillStore
 from .tool_specs import TOOLS
+from .verification import VerificationStore
 from .windows_ui import WindowsUIProvider
 
 
@@ -48,8 +51,9 @@ Use durable memory for facts, preferences, decisions, relationships, and commitm
 likely to matter later. Use event subscriptions and scheduled wakes only for concrete future
 dependencies. Avoid polling loops.
 
-Do not expose hidden chain-of-thought. Report conclusions, evidence, completed operations,
-pending approvals, and future dependencies.
+Do not claim work is verified unless verification evidence shows a relevant successful check.
+Targeted checks prove only their actual scope. Do not expose hidden chain-of-thought. Report
+conclusions, evidence, completed operations, pending approvals, and future dependencies.
 """.strip()
 
 
@@ -68,6 +72,7 @@ class HomunculaRuntime:
         processes: BackgroundProcessManager,
         plans: PlanStore,
         skills: SkillStore,
+        review_enabled: bool = True,
     ):
         self.db = db
         self.computer = computer
@@ -81,6 +86,11 @@ class HomunculaRuntime:
         self.processes = processes
         self.plans = plans
         self.skills = skills
+        self.verification = VerificationStore(db)
+        self.review_enabled = review_enabled
+        self.reviewer = PostTurnReviewer(provider, memory, skills, sentinel)
+        self._review_tasks: set[asyncio.Task[None]] = set()
+        self._review_by_thread: dict[str, asyncio.Task[None]] = {}
 
     def activity(
         self,
@@ -269,6 +279,22 @@ class HomunculaRuntime:
             *bundle.messages,
         ]
 
+        evidence = self.verification.summary(responsibility_id)
+        if evidence["total"]:
+            lines = []
+            for kind, row in evidence["latest_by_kind"].items():
+                command = " ".join(row["command"])
+                lines.append(
+                    f"{kind}: {row['status']} exit={row['returncode']} command={command}"
+                )
+            messages.insert(
+                1,
+                {
+                    "role": "system",
+                    "content": "Latest verification evidence:\n" + "\n".join(lines),
+                },
+            )
+
         if observation:
             messages.insert(
                 1,
@@ -283,6 +309,8 @@ class HomunculaRuntime:
 
         pending_actions: list[str] = []
         final_content = ""
+        loop_guard = ToolLoopGuard()
+        loop_blocks = 0
 
         for _ in range(20):
             response = await self.provider.chat(messages, TOOLS)
@@ -306,12 +334,45 @@ class HomunculaRuntime:
                 if isinstance(args, str):
                     args = json.loads(args)
 
-                result = await self._call_tool(
-                    name,
-                    args,
-                    responsibility_id=responsibility_id,
-                    observation=observation,
-                )
+                guard_decision = loop_guard.before(name, args)
+                if not guard_decision.allowed:
+                    loop_blocks += 1
+                    result = {
+                        "status": "blocked",
+                        "reason": "tool_loop_guard",
+                        "code": guard_decision.code,
+                        "message": guard_decision.message,
+                    }
+                    self.activity(
+                        "guardrail.blocked",
+                        guard_decision.message,
+                        responsibility_id=responsibility_id,
+                        metadata={"tool": name, "code": guard_decision.code},
+                    )
+                else:
+                    result = await self._call_tool(
+                        name,
+                        args,
+                        responsibility_id=responsibility_id,
+                        observation=observation,
+                    )
+                    after_decision = loop_guard.after(name, args, result)
+                    if not after_decision.allowed:
+                        loop_blocks += 1
+                        result = {
+                            **result,
+                            "guardrail": {
+                                "code": after_decision.code,
+                                "message": after_decision.message,
+                            },
+                        }
+                        self.activity(
+                            "guardrail.warning",
+                            after_decision.message,
+                            responsibility_id=responsibility_id,
+                            metadata={"tool": name, "code": after_decision.code},
+                        )
+
                 if result.get("status") == "approval_required":
                     pending_actions.append(result["action_id"])
 
@@ -330,10 +391,20 @@ class HomunculaRuntime:
                 )
                 break
 
+            if loop_blocks >= 2:
+                final_content = (
+                    response.content
+                    or "I stopped this turn because repeated tool calls were not making progress."
+                )
+                break
+
         if not final_content:
             final_content = "The local model completed the turn without additional text."
 
         self._store_message(thread_id, "assistant", final_content)
+        if self.review_enabled and responsibility_id is None and not observation:
+            self._schedule_review(thread_id)
+
         return {
             "content": final_content,
             "pending_actions": pending_actions,
@@ -345,6 +416,67 @@ class HomunculaRuntime:
                 "plan_id": bundle.plan_id,
             },
         }
+
+    def _schedule_review(self, thread_id: str) -> None:
+        previous = self._review_by_thread.get(thread_id)
+        if previous and not previous.done():
+            previous.cancel()
+
+        task = asyncio.create_task(
+            self._run_review(thread_id),
+            name=f"homuncula-review-{thread_id[:8]}",
+        )
+        self._review_tasks.add(task)
+        self._review_by_thread[thread_id] = task
+
+        def cleanup(done: asyncio.Task[None]) -> None:
+            self._review_tasks.discard(done)
+            if self._review_by_thread.get(thread_id) is done:
+                self._review_by_thread.pop(thread_id, None)
+
+        task.add_done_callback(cleanup)
+
+    async def _run_review(self, thread_id: str) -> None:
+        try:
+            await asyncio.sleep(2.0)
+            rows = self.db.all(
+                """
+                SELECT role, content
+                FROM messages
+                WHERE thread_id = ?
+                ORDER BY created_at DESC
+                LIMIT 12
+                """,
+                (thread_id,),
+            )
+            rows.reverse()
+            result = await self.reviewer.review(rows)
+            self.activity(
+                "review.completed",
+                (
+                    f"Post-turn review stored {result['memories_added']} memories "
+                    f"and proposed {len(result['skill_actions'])} skills"
+                ),
+                metadata=result,
+            )
+        except asyncio.CancelledError:
+            raise
+        except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
+            self.activity(
+                "review.failed",
+                str(exc),
+                metadata={"thread_id": thread_id},
+            )
+
+    async def shutdown(self) -> None:
+        tasks = list(self._review_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._review_tasks.clear()
+        self._review_by_thread.clear()
 
     def autonomy_paused(self) -> bool:
         return self.db.setting("runtime.paused", "0") == "1"
@@ -676,6 +808,7 @@ class HomunculaRuntime:
                     "argv": argv,
                     "cwd": args.get("cwd", "."),
                     "timeout": int(args.get("timeout", 120)),
+                    "responsibility_id": responsibility_id,
                 },
                 preview="Run process: " + " ".join(argv),
                 risk="execute",
@@ -760,6 +893,28 @@ class HomunculaRuntime:
                 },
                 preview=f"Upload workspace file {args['path']}",
                 risk="external-write",
+                responsibility_id=responsibility_id,
+                observation=observation,
+            )
+
+        if name == "browser_download":
+            directory = args.get("directory", "downloads")
+            max_mb = max(1, min(int(args.get("max_mb", 250)), 2048))
+            return await self._governed(
+                capability="browser.download",
+                target=directory,
+                intent=args["intent"],
+                args={
+                    "op": "download",
+                    "ref": args["ref"],
+                    "directory": directory,
+                    "max_mb": max_mb,
+                },
+                preview=(
+                    f"Download browser file into workspace/{directory} "
+                    f"(limit {max_mb} MB)"
+                ),
+                risk="local-write",
                 responsibility_id=responsibility_id,
                 observation=observation,
             )
@@ -910,6 +1065,12 @@ class HomunculaRuntime:
                     cwd=args.get("cwd", "."),
                     timeout=int(args.get("timeout", 120)),
                 )
+                evidence = self.verification.record_process(
+                    action_id=action_id,
+                    responsibility_id=args.get("responsibility_id"),
+                    result=result,
+                )
+                result = {**result, "verification_id": evidence["id"]}
             elif capability == "process.start":
                 result = await self.processes.start(
                     args["argv"],
@@ -938,6 +1099,22 @@ class HomunculaRuntime:
                     args["ref"],
                     self.computer.resolve_path(args["path"]),
                 )
+            elif capability == "browser.download":
+                directory = str(args.get("directory", "downloads"))
+                result = await self.browser.download(
+                    args["ref"],
+                    self.computer.resolve_path(directory),
+                    max_bytes=int(args.get("max_mb", 250)) * 1024 * 1024,
+                )
+                prefix = directory.rstrip("/\\")
+                result = {
+                    **result,
+                    "path": (
+                        f"{prefix}/{result['filename']}"
+                        if prefix and prefix != "."
+                        else result["filename"]
+                    ),
+                }
             elif capability == "windows.ui.read":
                 if args["op"] == "list":
                     result = {
