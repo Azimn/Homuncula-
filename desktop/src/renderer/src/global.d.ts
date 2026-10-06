@@ -4,6 +4,7 @@ declare global {
   interface Window {
     homuncula: {
       health: () => Promise<any>;
+      installOllama: () => Promise<any>;
       restartHost: () => Promise<any>;
       state: () => Promise<any>;
       pauseAutonomy: () => Promise<any>;
@@ -48,6 +49,9 @@ declare global {
       plans: () => Promise<any[]>;
       skills: () => Promise<any[]>;
       verification: () => Promise<any[]>;
+      models: () => Promise<any>;
+      selectModel: (model: string) => Promise<any>;
+      pullModel: (model: string) => Promise<any>;
       computerStatus: () => Promise<any>;
       windows: () => Promise<any>;
     };
