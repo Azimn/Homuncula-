@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import os
+import re
 import secrets
 from pathlib import Path
 from typing import Any
@@ -57,4 +58,23 @@ def redact_payload(value: Any) -> Any:
         return [redact_payload(item) for item in value]
     if isinstance(value, tuple):
         return tuple(redact_payload(item) for item in value)
+    return value
+
+
+_TEXT_SECRET_PATTERNS = (
+    re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s]+"),
+    re.compile(
+        r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token)"
+        r"(\s*[=:]\s*)([^\s,;]+)"
+    ),
+)
+
+
+def redact_text(text: str) -> str:
+    value = str(text)
+    value = _TEXT_SECRET_PATTERNS[0].sub(r"\1" + REDACTED, value)
+    value = _TEXT_SECRET_PATTERNS[1].sub(
+        lambda match: match.group(1) + match.group(2) + REDACTED,
+        value,
+    )
     return value
