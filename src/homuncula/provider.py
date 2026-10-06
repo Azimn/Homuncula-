@@ -38,9 +38,8 @@ class OllamaProvider:
         if tools:
             payload["tools"] = tools
 
-        async with self._chat_lock:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(f"{self.base_url}/api/chat", json=payload)
+        async with self._chat_lock, httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(f"{self.base_url}/api/chat", json=payload)
 
         if response.status_code >= 400:
             raise ProviderError(
