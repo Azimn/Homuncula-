@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 SLUG_RE = re.compile(r"[^a-z0-9_-]+")
 SAFE_TOOL_RE = re.compile(r"^[a-zA-Z0-9_.-]+$")
 
