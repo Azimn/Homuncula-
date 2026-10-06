@@ -927,3 +927,11 @@ button.mini {
     min-width: 0;
   }
 }
+
+
+.computer-actions {
+  padding: 0 19px 19px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
