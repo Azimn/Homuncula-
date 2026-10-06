@@ -141,6 +141,11 @@ type Verification = {
   created_at: string;
 };
 
+type StartupState = {
+  supported: boolean;
+  openAtLogin: boolean;
+};
+
 type ModelState = {
   ok: boolean;
   selected: string;
@@ -222,6 +227,10 @@ function App() {
   const [modelInput, setModelInput] = useState("qwen3:8b");
   const [modelBusy, setModelBusy] = useState(false);
   const [modelMessage, setModelMessage] = useState<string | null>(null);
+  const [startup, setStartup] = useState<StartupState>({
+    supported: false,
+    openAtLogin: false
+  });
 
   const [threadId, setThreadId] = useState<string | null>(null);
   const [chat, setChat] = useState<ChatLine[]>([
@@ -303,12 +312,14 @@ function App() {
 
   const refreshComputer = useCallback(async () => {
     try {
-      const [status, windowState] = await Promise.all([
+      const [status, windowState, startupState] = await Promise.all([
         window.homuncula.computerStatus(),
-        window.homuncula.windows().catch(() => ({ windows: [] }))
+        window.homuncula.windows().catch(() => ({ windows: [] })),
+        window.homuncula.startupSettings()
       ]);
       setComputer(status);
       setWindows(windowState.windows || []);
+      setStartup(startupState as StartupState);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -461,6 +472,18 @@ function App() {
     try {
       await window.homuncula.restartHost();
       setError("Local host restarted. Health checks will reconnect automatically.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleLaunchAtLogin(): Promise<void> {
+    setBusy(true);
+    try {
+      const next = await window.homuncula.setLaunchAtLogin(!startup.openAtLogin);
+      setStartup(next as StartupState);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -1175,6 +1198,26 @@ function App() {
                 <div><span>Browser</span><strong>{computer?.browser?.started ? computer.browser.url || "Open" : "Idle"}</strong></div>
                 <div><span>Browser engine</span><strong>{computer?.browser?.channel || health?.browser_channel || "Unknown"}</strong></div>
                 <div><span>Autonomy</span><strong>{autonomyPaused ? "Paused" : "Running"}</strong></div>
+                <div>
+                  <span>Launch at login</span>
+                  <strong>
+                    {startup.supported
+                      ? startup.openAtLogin
+                        ? "Enabled"
+                        : "Disabled"
+                      : "Available in packaged app"}
+                  </strong>
+                </div>
+              </div>
+              <div className="computer-actions">
+                <button
+                  className="ghost"
+                  disabled={busy || !startup.supported}
+                  onClick={() => void toggleLaunchAtLogin()}
+                  type="button"
+                >
+                  {startup.openAtLogin ? "Disable launch at login" : "Enable launch at login"}
+                </button>
               </div>
             </div>
 
