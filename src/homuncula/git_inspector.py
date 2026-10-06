@@ -34,10 +34,20 @@ class GitInspector:
             raise GitUnavailable((result.stderr or result.stdout).strip())
         return result
 
+    def _repository_root(self) -> Path:
+        root = Path(self._run(["rev-parse", "--show-toplevel"]).stdout.strip()).resolve()
+        try:
+            self.workspace.relative_to(root)
+        except ValueError as exc:
+            raise GitUnavailable("Workspace is outside the resolved Git root") from exc
+        return root
+
     def status(self, *, limit: int = 250) -> dict[str, Any]:
+        self._repository_root()
         branch = self._run(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-        root = self._run(["rev-parse", "--show-toplevel"]).stdout.strip()
-        raw = self._run(["status", "--porcelain=v1", "--untracked-files=normal"]).stdout
+        raw = self._run(
+            ["status", "--porcelain=v1", "--untracked-files=normal", "--", "."]
+        ).stdout
 
         files = []
         for line in raw.splitlines()[: max(1, min(limit, 1000))]:
@@ -51,10 +61,10 @@ class GitInspector:
                 }
             )
 
-        stat = self._run(["diff", "--stat", "--"]).stdout[-20_000:]
-        staged_stat = self._run(["diff", "--cached", "--stat", "--"]).stdout[-20_000:]
+        stat = self._run(["diff", "--stat", "--", "."]).stdout[-20_000:]
+        staged_stat = self._run(["diff", "--cached", "--stat", "--", "."]).stdout[-20_000:]
         return {
-            "root": root,
+            "root": str(self.workspace),
             "branch": branch,
             "files": files,
             "working_stat": stat,
@@ -68,6 +78,7 @@ class GitInspector:
         staged: bool = False,
         max_chars: int = 80_000,
     ) -> dict[str, Any]:
+        self._repository_root()
         candidate = (self.workspace / relative).resolve()
         try:
             safe_relative = candidate.relative_to(self.workspace)
