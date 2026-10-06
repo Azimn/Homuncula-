@@ -10,6 +10,7 @@ from homuncula.db import (
     CURRENT_SCHEMA_VERSION,
     Database,
     DatabaseMigrationError,
+    EVIDENCE_SCHEMA,
     Migration,
 )
 
@@ -70,6 +71,31 @@ def test_v02_database_upgrades_without_losing_durable_state(tmp_path: Path) -> N
         WHERE type = 'table' AND name = 'evidence_read_receipts'
         """
     ) == {"name": "evidence_read_receipts"}
+
+
+def test_preledger_evidence_database_is_adopted_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "preledger-evidence.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(BASE_SCHEMA)
+        conn.executescript(EVIDENCE_SCHEMA)
+        conn.execute(
+            """
+            INSERT INTO evidence_sources
+            (id, kind, locator, title, metadata_json, created_at)
+            VALUES ('source-1', 'file', 'workspace://notes.txt', 'notes.txt',
+                    '{}', '2026-10-06T00:00:00+00:00')
+            """
+        )
+
+    db = Database(path)
+    db.initialize()
+
+    assert db.one(
+        "SELECT locator FROM evidence_sources WHERE id = 'source-1'"
+    ) == {"locator": "workspace://notes.txt"}
+    assert [item["version"] for item in db.schema_status()["applied"]] == [1, 2]
 
 
 def test_initialize_is_idempotent_after_migrations(tmp_path: Path) -> None:
