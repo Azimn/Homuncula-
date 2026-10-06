@@ -192,7 +192,12 @@ class BackgroundProcessManager:
         ]
         for process_id, process in running:
             self._terminating.add(process_id)
-            await asyncio.to_thread(terminate_pid_tree, process.pid)
+            tree_terminated = await asyncio.to_thread(
+                terminate_pid_tree,
+                process.pid,
+            )
+            if not tree_terminated and process.returncode is None:
+                process.kill()
 
         tasks = list(self._tasks.values())
         if not tasks:
