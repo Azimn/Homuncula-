@@ -6,6 +6,7 @@ async function request(path: string, method = "GET", body?: unknown): Promise<an
 
 contextBridge.exposeInMainWorld("homuncula", {
   health: () => request("/health"),
+  restartHost: () => ipcRenderer.invoke("homuncula:restart-backend"),
   state: () => request("/state"),
   pauseAutonomy: () => request("/runtime/pause", "POST"),
   resumeAutonomy: () => request("/runtime/resume", "POST"),
