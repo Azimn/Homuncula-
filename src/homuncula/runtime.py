@@ -897,6 +897,28 @@ class HomunculaRuntime:
                 observation=observation,
             )
 
+        if name == "browser_download":
+            directory = args.get("directory", "downloads")
+            max_mb = max(1, min(int(args.get("max_mb", 250)), 2048))
+            return await self._governed(
+                capability="browser.download",
+                target=directory,
+                intent=args["intent"],
+                args={
+                    "op": "download",
+                    "ref": args["ref"],
+                    "directory": directory,
+                    "max_mb": max_mb,
+                },
+                preview=(
+                    f"Download browser file into workspace/{directory} "
+                    f"(limit {max_mb} MB)"
+                ),
+                risk="local-write",
+                responsibility_id=responsibility_id,
+                observation=observation,
+            )
+
         if name == "windows_list":
             return await self._governed(
                 capability="windows.ui.read",
@@ -1077,6 +1099,22 @@ class HomunculaRuntime:
                     args["ref"],
                     self.computer.resolve_path(args["path"]),
                 )
+            elif capability == "browser.download":
+                directory = str(args.get("directory", "downloads"))
+                result = await self.browser.download(
+                    args["ref"],
+                    self.computer.resolve_path(directory),
+                    max_bytes=int(args.get("max_mb", 250)) * 1024 * 1024,
+                )
+                prefix = directory.rstrip("/\\")
+                result = {
+                    **result,
+                    "path": (
+                        f"{prefix}/{result['filename']}"
+                        if prefix and prefix != "."
+                        else result["filename"]
+                    ),
+                }
             elif capability == "windows.ui.read":
                 if args["op"] == "list":
                     result = {
