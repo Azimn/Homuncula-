@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-type View = "home" | "memory" | "findings" | "permissions" | "computer" | "activity";
+type View = "home" | "mission" | "memory" | "findings" | "changes" | "permissions" | "computer" | "activity";
 
 type Health = {
   ok: boolean;
@@ -100,6 +100,76 @@ type WindowRecord = {
   class_name?: string | null;
 };
 
+type PlanStep = {
+  id: string;
+  position: number;
+  title: string;
+  detail: string;
+  status: string;
+  summary?: string | null;
+};
+
+type PlanRecord = {
+  id: string;
+  responsibility_id: string;
+  title: string;
+  goal: string;
+  status: string;
+  current_step?: number | null;
+  steps: PlanStep[];
+};
+
+type SkillRecord = {
+  name: string;
+  description: string;
+  instructions: string;
+  allowed_tools: string[];
+  source: string;
+  path: string;
+};
+
+type VerificationEvent = {
+  id: string;
+  responsibility_id?: string | null;
+  kind: string;
+  command: string;
+  cwd: string;
+  status: string;
+  exit_code: number;
+  output_summary: string;
+  created_at: string;
+};
+
+type VerificationState = {
+  summary: {
+    passing_kinds: string[];
+    failing_kinds: string[];
+    count: number;
+  };
+  events: VerificationEvent[];
+};
+
+type GitFile = {
+  index: string;
+  worktree: string;
+  path: string;
+};
+
+type GitState = {
+  root: string;
+  branch: string;
+  files: GitFile[];
+  working_stat: string;
+  staged_stat: string;
+};
+
+type GitDiff = {
+  path: string;
+  staged: boolean;
+  diff: string;
+  truncated: boolean;
+};
+
 type ChatLine = {
   role: "user" | "assistant" | "system";
   content: string;
@@ -111,6 +181,11 @@ const VIEW_COPY: Record<View, { eyebrow: string; title: string; subtitle: string
     title: "Stay responsible, not merely responsive.",
     subtitle: "Conversation, active responsibilities, and decisions that need you."
   },
+  mission: {
+    eyebrow: "Mission control",
+    title: "Plans, skills, and proof in one place.",
+    subtitle: "See what each responsibility is doing, what methods it can reuse, and what has actually been verified."
+  },
   memory: {
     eyebrow: "Inspectable memory",
     title: "What Homuncula carries forward.",
@@ -120,6 +195,11 @@ const VIEW_COPY: Record<View, { eyebrow: string; title: string; subtitle: string
     eyebrow: "Proactive observation",
     title: "Things worth your attention.",
     subtitle: "Read-only discoveries surfaced by responsibilities and event sources."
+  },
+  changes: {
+    eyebrow: "Read-only workspace changes",
+    title: "See exactly what changed.",
+    subtitle: "Inspect Git status and diffs without granting a generic shell or mutation path."
   },
   permissions: {
     eyebrow: "Sentinel",
@@ -162,6 +242,15 @@ function App() {
   const [processes, setProcesses] = useState<ProcessRecord[]>([]);
   const [windows, setWindows] = useState<WindowRecord[]>([]);
   const [computer, setComputer] = useState<any>(null);
+  const [plans, setPlans] = useState<PlanRecord[]>([]);
+  const [skills, setSkills] = useState<SkillRecord[]>([]);
+  const [verification, setVerification] = useState<VerificationState>({
+    summary: { passing_kinds: [], failing_kinds: [], count: 0 },
+    events: []
+  });
+  const [gitState, setGitState] = useState<GitState | null>(null);
+  const [gitDiff, setGitDiff] = useState<GitDiff | null>(null);
+  const [selectedGitPath, setSelectedGitPath] = useState<string | null>(null);
 
   const [threadId, setThreadId] = useState<string | null>(null);
   const [chat, setChat] = useState<ChatLine[]>([
@@ -196,7 +285,10 @@ function App() {
         nextFindings,
         nextMemories,
         nextGrants,
-        nextProcesses
+        nextProcesses,
+        nextPlans,
+        nextSkills,
+        nextVerification
       ] = await Promise.all([
         window.homuncula.health(),
         window.homuncula.state(),
@@ -206,7 +298,10 @@ function App() {
         window.homuncula.findings(),
         window.homuncula.memory(),
         window.homuncula.grants(),
-        window.homuncula.processes()
+        window.homuncula.processes(),
+        window.homuncula.plans(),
+        window.homuncula.skills(),
+        window.homuncula.verification()
       ]);
 
       setHealth(nextHealth as Health);
@@ -218,6 +313,9 @@ function App() {
       setMemories(nextMemories as MemoryRecord[]);
       setGrants(nextGrants as Grant[]);
       setProcesses(nextProcesses as ProcessRecord[]);
+      setPlans(nextPlans as PlanRecord[]);
+      setSkills(nextSkills as SkillRecord[]);
+      setVerification(nextVerification as VerificationState);
       setBackendReady(true);
       setError(null);
     } catch (cause) {
@@ -239,6 +337,31 @@ function App() {
     }
   }, []);
 
+  const refreshChanges = useCallback(async () => {
+    try {
+      const status = (await window.homuncula.gitStatus()) as GitState;
+      setGitState(status);
+      if (
+        selectedGitPath &&
+        status.files.some((item) => item.path === selectedGitPath)
+      ) {
+        const diff = await window.homuncula.gitDiff(selectedGitPath);
+        setGitDiff(diff as GitDiff);
+      } else if (
+        selectedGitPath &&
+        !status.files.some((item) => item.path === selectedGitPath)
+      ) {
+        setSelectedGitPath(null);
+        setGitDiff(null);
+      }
+    } catch (cause) {
+      setGitState(null);
+      setGitDiff(null);
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [selectedGitPath]);
+
+
   useEffect(() => {
     void refresh();
     const timer = window.setInterval(() => void refresh(), 5000);
@@ -247,7 +370,8 @@ function App() {
 
   useEffect(() => {
     if (view === "computer") void refreshComputer();
-  }, [view, refreshComputer]);
+    if (view === "changes") void refreshChanges();
+  }, [view, refreshComputer, refreshChanges]);
 
   useEffect(() => {
     void (async () => {
@@ -442,6 +566,35 @@ function App() {
     }
   }
 
+  async function restartRuntime(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      await window.homuncula.restartRuntime();
+      await refresh();
+      if (view === "computer") await refreshComputer();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadGitDiff(path: string, staged = false): Promise<void> {
+    setSelectedGitPath(path);
+    try {
+      const diff = await window.homuncula.gitDiff(path, staged);
+      setGitDiff(diff as GitDiff);
+    } catch (cause) {
+      setGitDiff(null);
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  function responsibilityName(id: string): string {
+    return responsibilities.find((item) => item.id === id)?.title || "Responsibility";
+  }
+
   const copy = VIEW_COPY[view];
 
   return (
@@ -459,8 +612,10 @@ function App() {
           {(
             [
               ["home", "Home"],
+              ["mission", "Mission"],
               ["memory", "Memory"],
               ["findings", "Findings"],
+              ["changes", "Changes"],
               ["permissions", "Permissions"],
               ["computer", "Computer"],
               ["activity", "Activity"]
@@ -850,6 +1005,178 @@ function App() {
           </section>
         )}
 
+        {view === "mission" && (
+          <section className="mission-layout">
+            <div className="card span-two">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Durable execution</span>
+                  <h2>Active plans</h2>
+                </div>
+                <span className="count">{plans.length}</span>
+              </div>
+              <div className="plan-grid">
+                {plans.length === 0 && (
+                  <div className="empty">No durable plans have been created yet.</div>
+                )}
+                {plans.map((plan) => (
+                  <article className="plan-card" key={plan.id}>
+                    <header>
+                      <div>
+                        <span>{responsibilityName(plan.responsibility_id)}</span>
+                        <h3>{plan.title}</h3>
+                      </div>
+                      <span className={"badge " + plan.status}>{plan.status}</span>
+                    </header>
+                    <p>{plan.goal}</p>
+                    <div className="plan-steps">
+                      {plan.steps.map((step) => (
+                        <div className={"plan-step " + step.status} key={step.id}>
+                          <span className="step-glyph">
+                            {step.status === "complete"
+                              ? "✓"
+                              : step.status === "active"
+                                ? "●"
+                                : step.status === "blocked"
+                                  ? "!"
+                                  : "○"}
+                          </span>
+                          <div>
+                            <strong>{step.position}. {step.title}</strong>
+                            <span>{step.summary || step.detail}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Reusable methods</span>
+                  <h2>Local skills</h2>
+                </div>
+                <span className="count">{skills.length}</span>
+              </div>
+              <div className="skill-grid">
+                {skills.length === 0 && (
+                  <div className="empty">No reusable local skills installed yet.</div>
+                )}
+                {skills.map((skill) => (
+                  <article className="skill-card" key={skill.name}>
+                    <div>
+                      <strong>{skill.name}</strong>
+                      <span>{skill.source}</span>
+                    </div>
+                    <p>{skill.description}</p>
+                    <footer>
+                      {skill.allowed_tools.slice(0, 6).map((tool) => (
+                        <code className="tool-chip" key={tool}>{tool}</code>
+                      ))}
+                    </footer>
+                  </article>
+                ))}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Verification evidence</span>
+                  <h2>What is actually proven</h2>
+                </div>
+                <span className="count">{verification.summary.count}</span>
+              </div>
+              <div className="verification-summary">
+                <div>
+                  <span>Passing</span>
+                  <strong>{verification.summary.passing_kinds.join(", ") || "None yet"}</strong>
+                </div>
+                <div>
+                  <span>Failing</span>
+                  <strong>{verification.summary.failing_kinds.join(", ") || "None"}</strong>
+                </div>
+              </div>
+              <div className="verification-list">
+                {verification.events.length === 0 && (
+                  <div className="empty">No test, lint, typecheck, or build evidence yet.</div>
+                )}
+                {verification.events.slice(0, 12).map((event) => (
+                  <div className="verification-row" key={event.id}>
+                    <span className={"badge " + event.status}>{event.status}</span>
+                    <div>
+                      <strong>{event.kind}</strong>
+                      <code>{event.command}</code>
+                    </div>
+                    <time>{relativeTime(event.created_at)}</time>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {view === "changes" && (
+          <section className="git-layout">
+            <div className="card git-files">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Git workspace</span>
+                  <h2>{gitState?.branch || "Repository"}</h2>
+                </div>
+                <button className="ghost" onClick={() => void refreshChanges()} type="button">
+                  Refresh
+                </button>
+              </div>
+              <div className="git-stats">
+                <span>{gitState?.root || "No Git repository available"}</span>
+                {gitState?.working_stat && <pre>{gitState.working_stat}</pre>}
+                {gitState?.staged_stat && <pre>{gitState.staged_stat}</pre>}
+              </div>
+              <div className="git-file-list">
+                {gitState && gitState.files.length === 0 && (
+                  <div className="empty">Working tree is clean.</div>
+                )}
+                {gitState?.files.map((file) => (
+                  <button
+                    className={
+                      selectedGitPath === file.path
+                        ? "git-file-row selected"
+                        : "git-file-row"
+                    }
+                    key={file.path}
+                    onClick={() => void loadGitDiff(file.path)}
+                    type="button"
+                  >
+                    <code>{file.index}{file.worktree}</code>
+                    <span>{file.path}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="card diff-view">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Read-only diff</span>
+                  <h2>{gitDiff?.path || "Select a changed file"}</h2>
+                </div>
+                {gitDiff?.truncated && <span className="badge">truncated</span>}
+              </div>
+              {gitDiff ? (
+                <pre className="diff-pre">{gitDiff.diff || "No unstaged diff for this file."}</pre>
+              ) : (
+                <div className="empty diff-empty">
+                  Choose a changed file to inspect its diff.
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
         {view === "computer" && (
           <section className="computer-layout">
             <div className="card">
@@ -858,9 +1185,19 @@ function App() {
                   <span className="eyebrow">Host status</span>
                   <h2>Local computer</h2>
                 </div>
-                <button className="ghost" onClick={() => void refreshComputer()} type="button">
-                  Refresh
-                </button>
+                <div className="runtime-actions">
+                  <button className="ghost" onClick={() => void refreshComputer()} type="button">
+                    Refresh
+                  </button>
+                  <button
+                    className="ghost"
+                    disabled={busy}
+                    onClick={() => void restartRuntime()}
+                    type="button"
+                  >
+                    Restart runtime
+                  </button>
+                </div>
               </div>
               <div className="computer-facts">
                 <div><span>Workspace</span><strong>{computer?.workspace || health?.workspace}</strong></div>
