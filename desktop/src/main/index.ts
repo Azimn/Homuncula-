@@ -14,13 +14,16 @@ import { electronApp, is } from "@electron-toolkit/utils";
 
 const API_BASE = "http://127.0.0.1:43900";
 const ALLOWED_API_PATH =
-  /^\/(health|state|runtime|threads|responsibilities|actions|grants|activity|memory|findings|processes|subscriptions|secrets|computer)(\/|\?|$)/;
+  /^\/(health|state|runtime|threads|responsibilities|actions|grants|activity|memory|findings|plans|skills|verification|processes|subscriptions|secrets|computer)(\/|\?|$)/;
 
 let backend: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
 let ownerToken = "";
+let suppressAutoRestart = false;
+let restartTimer: NodeJS.Timeout | null = null;
+const restartHistory: number[] = [];
 
 function dataHome(): string {
   const configured = process.env.HOMUNCULA_HOME;
@@ -98,9 +101,82 @@ function startBackend(): void {
   backend.stderr?.on("data", (chunk) => {
     process.stderr.write("[agentd] " + chunk.toString());
   });
-  backend.on("exit", () => {
+  backend.on("exit", (code, signal) => {
     backend = null;
+    process.stderr.write(
+      `[agentd] exited code=${code ?? "null"} signal=${signal ?? "null"}\n`
+    );
+    if (!quitting && !suppressAutoRestart) {
+      scheduleBackendRestart();
+    }
   });
+  backend.on("error", (error) => {
+    process.stderr.write("[agentd] process error: " + error.message + "\n");
+  });
+}
+
+function scheduleBackendRestart(): void {
+  if (restartTimer || quitting) return;
+
+  const now = Date.now();
+  while (restartHistory.length && now - restartHistory[0] > 60_000) {
+    restartHistory.shift();
+  }
+  if (restartHistory.length >= 3) {
+    process.stderr.write("[agentd] automatic restart limit reached\n");
+    return;
+  }
+
+  restartHistory.push(now);
+  restartTimer = setTimeout(() => {
+    restartTimer = null;
+    if (!backend && !quitting) startBackend();
+  }, 1000);
+}
+
+async function waitForBackend(timeoutMs = 15_000): Promise<void> {
+  if (!backend) startBackend();
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown = null;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(API_BASE + "/healthz");
+      if (response.ok) return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+
+  throw new Error(
+    "Homuncula runtime did not become ready" +
+      (lastError instanceof Error ? ": " + lastError.message : "")
+  );
+}
+
+async function restartBackend(): Promise<void> {
+  suppressAutoRestart = true;
+  try {
+    const current = backend;
+    if (current && !current.killed) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 1500);
+        current.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        current.kill();
+      });
+    }
+    backend = null;
+  } finally {
+    suppressAutoRestart = false;
+  }
+
+  restartHistory.length = 0;
+  startBackend();
+  await waitForBackend();
 }
 
 function installApiBridge(): void {
@@ -110,6 +186,8 @@ function installApiBridge(): void {
       if (!ALLOWED_API_PATH.test(path) || path.includes("://")) {
         throw new Error("Invalid local API path");
       }
+
+      await waitForBackend();
 
       const headers: Record<string, string> = {
         Authorization: "Bearer " + ownerToken
@@ -131,6 +209,11 @@ function installApiBridge(): void {
       return response.json();
     }
   );
+
+  ipcMain.handle("homuncula:restart-runtime", async () => {
+    await restartBackend();
+    return { ok: true };
+  });
 }
 
 function showWindow(): void {
@@ -211,6 +294,10 @@ app.whenReady().then(() => {
 
 app.on("before-quit", () => {
   quitting = true;
+  if (restartTimer) {
+    clearTimeout(restartTimer);
+    restartTimer = null;
+  }
   if (backend && !backend.killed) {
     backend.kill();
   }
