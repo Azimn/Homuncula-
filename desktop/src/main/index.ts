@@ -103,7 +103,31 @@ function startBackend(): void {
   });
 }
 
+async function restartBackend(): Promise<void> {
+  const current = backend;
+  backend = null;
+  if (current && !current.killed) {
+    await new Promise<void>((resolveRestart) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        resolveRestart();
+      };
+      current.once("exit", finish);
+      current.kill();
+      setTimeout(finish, 2000);
+    });
+  }
+  startBackend();
+}
+
 function installApiBridge(): void {
+  ipcMain.handle("homuncula:restart-backend", async () => {
+    await restartBackend();
+    return { restarted: true };
+  });
+
   ipcMain.handle(
     "homuncula:request",
     async (_event, path: string, method: string = "GET", body?: unknown) => {
