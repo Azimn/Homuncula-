@@ -26,6 +26,14 @@ def classify_command(argv: list[str]) -> str:
     return "command"
 
 
+def verification_output_summary(text: str, *, truncated: bool) -> str:
+    tail_limit = 3900 if truncated else 4000
+    summary = redact_text(text[-tail_limit:])
+    if truncated:
+        return "[captured output truncated]\n" + summary
+    return summary
+
+
 class VerificationStore:
     def __init__(self, db: Database):
         self.db = db
@@ -44,10 +52,6 @@ class VerificationStore:
 
         stdout = str(result.get("stdout", ""))
         stderr = str(result.get("stderr", ""))
-        if result.get("stdout_truncated"):
-            stdout = "[captured output truncated]\n" + stdout
-        if result.get("stderr_truncated"):
-            stderr = "[captured output truncated]\n" + stderr
 
         record_id = "verify_" + uuid.uuid4().hex
         self.db.execute(
@@ -66,8 +70,14 @@ class VerificationStore:
                 str(result.get("cwd", ".")),
                 status,
                 returncode,
-                redact_text(stdout[-4000:]),
-                redact_text(stderr[-4000:]),
+                verification_output_summary(
+                    stdout,
+                    truncated=bool(result.get("stdout_truncated")),
+                ),
+                verification_output_summary(
+                    stderr,
+                    truncated=bool(result.get("stderr_truncated")),
+                ),
                 now_iso(),
             ),
         )
