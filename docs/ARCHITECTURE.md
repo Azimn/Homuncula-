@@ -28,7 +28,7 @@ Windows connector-style credentials are stored through DPAPI behind opaque refer
 
 SQLite is the system of record for application state.
 
-The schema contains settings, threads, messages, responsibilities, wakes, memories, memory revisions, memory vectors, plans, plan steps, grants, actions, activities, event subscriptions, event receipts, findings, background processes, verification events, evidence sources, evidence observations, evidence dossiers, dossier-observation links, and evidence reviews.
+The schema contains settings, threads, messages, responsibilities, wakes, memories, memory revisions, memory vectors, plans, plan steps, grants, actions, activities, event subscriptions, event receipts, findings, background processes, verification events, evidence sources, verified read receipts, evidence observations, observation-receipt links, evidence dossiers, dossier-observation links, and evidence reviews.
 
 The filesystem also stores the browser profile, local skills, protected secret blobs, and application data that is inappropriate for relational storage.
 
@@ -62,13 +62,19 @@ Corrections create memory revision records before updating the authoritative mem
 
 External observation and durable memory are separate state transitions.
 
-Evidence sources identify where information came from by source kind and redacted locator. Evidence observations preserve bounded redacted content, a content hash, observation time, responsibility scope, and metadata. Duplicate content from the same source resolves to the existing observation.
+Evidence sources identify where information came from by source kind and redacted locator.
+
+Verified read receipts are created inside the governed action executor after an actual read provider returns data and while the Sentinel action is still executing. Current receipt-producing capabilities are filesystem.read, browser.read, and process.read. The receipt binds the action ID, responsibility scope, capability, source kind, provider-derived locator/title, bounded redacted content, content hash, and metadata. The model cannot mint these receipts directly.
+
+Agent evidence capture accepts a receipt ID and optional exact excerpt. The source locator and title come from the receipt rather than model arguments. An excerpt must be a literal substring of the stored receipt content after redaction. Invalid receipt IDs, cross-responsibility misuse, and invented excerpts fail closed.
+
+Evidence observations preserve bounded redacted content, a content hash, observation time, responsibility scope, metadata, and any receipt links. Duplicate content from the same source resolves to the existing observation. Manual observations created through the authenticated owner API remain supported but are marked by the absence of a verified receipt link.
 
 Evidence dossiers bind one claim to one or more observation IDs. Creation performs deterministic structural prechecks and always starts the dossier in HOLD. The dossier retains confidence, declared unknowns, current reviewer unknowns, its latest review round, and any memory produced by successful promotion.
 
 The evidence council contains four local review roles: Scout, Verifier, Skeptic, and Integrator. Every role receives the same bounded evidence packet with no tools. Packet content is explicitly untrusted data.
 
-Reviewer output must conform to the verdict schema, and every cited observation ID must exist in the packet. A PASS review with no packet evidence is invalid. Provider failure, malformed JSON, invented evidence IDs, missing roles, or any other invalid reviewer output causes the aggregate result to remain HOLD.
+Reviewer output must conform to the verdict schema, and every cited observation ID must exist in the packet. The packet explicitly states whether each observation has mechanically verified receipt provenance or manual provenance. A PASS review with no packet evidence is invalid. Provider failure, malformed JSON, invented evidence IDs, missing roles, or any other invalid reviewer output causes the aggregate result to remain HOLD.
 
 Aggregation is deterministic and outside the model. A dossier passes only when Verifier, Skeptic, and Integrator all pass and every reviewer record is valid. It rejects when the critical reviewers provide sufficient independent rejection. Other combinations remain HOLD.
 
