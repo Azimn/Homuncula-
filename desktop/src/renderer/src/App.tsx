@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-type View = "home" | "work" | "memory" | "findings" | "permissions" | "computer" | "activity";
+type View = "home" | "work" | "changes" | "memory" | "findings" | "permissions" | "computer" | "activity";
 
 type Health = {
   ok: boolean;
@@ -141,6 +141,27 @@ type Verification = {
   created_at: string;
 };
 
+type GitFile = {
+  index: string;
+  worktree: string;
+  path: string;
+};
+
+type GitState = {
+  root: string;
+  branch: string;
+  files: GitFile[];
+  working_stat: string;
+  staged_stat: string;
+};
+
+type GitDiff = {
+  path: string;
+  staged: boolean;
+  diff: string;
+  truncated: boolean;
+};
+
 type StartupState = {
   supported: boolean;
   openAtLogin: boolean;
@@ -230,6 +251,11 @@ const VIEW_COPY: Record<View, { eyebrow: string; title: string; subtitle: string
     title: "Plans, skills, and proof of work.",
     subtitle: "See what the agent intends to do, what reusable procedures it knows, and what checks actually passed."
   },
+  changes: {
+    eyebrow: "Workspace state",
+    title: "Inspect what changed before anything ships.",
+    subtitle: "Read-only Git status and diffs scoped to Homuncula's configured workspace."
+  },
   memory: {
     eyebrow: "Inspectable memory",
     title: "What Homuncula carries forward.",
@@ -284,6 +310,9 @@ function App() {
   const [verification, setVerification] = useState<Verification[]>([]);
   const [windows, setWindows] = useState<WindowRecord[]>([]);
   const [computer, setComputer] = useState<any>(null);
+  const [gitState, setGitState] = useState<GitState | null>(null);
+  const [gitDiff, setGitDiff] = useState<GitDiff | null>(null);
+  const [selectedGitPath, setSelectedGitPath] = useState<string | null>(null);
   const [models, setModels] = useState<ModelState | null>(null);
   const [modelInput, setModelInput] = useState("qwen3:8b");
   const [modelBusy, setModelBusy] = useState(false);
@@ -405,6 +434,31 @@ function App() {
     }
   }, []);
 
+  const refreshChanges = useCallback(async () => {
+    try {
+      const status = (await window.homuncula.gitStatus()) as GitState;
+      setGitState(status);
+      if (
+        selectedGitPath &&
+        status.files.some((item) => item.path === selectedGitPath)
+      ) {
+        const file = status.files.find((item) => item.path === selectedGitPath)!;
+        const staged = file.worktree === " " && file.index !== " ";
+        setGitDiff(
+          (await window.homuncula.gitDiff(selectedGitPath, staged)) as GitDiff
+        );
+      } else {
+        setSelectedGitPath(null);
+        setGitDiff(null);
+      }
+      setError(null);
+    } catch (cause) {
+      setGitState(null);
+      setGitDiff(null);
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [selectedGitPath]);
+
   useEffect(() => {
     void refresh();
     const timer = window.setInterval(() => void refresh(), 5000);
@@ -413,7 +467,8 @@ function App() {
 
   useEffect(() => {
     if (view === "computer") void refreshComputer();
-  }, [view, refreshComputer]);
+    if (view === "changes") void refreshChanges();
+  }, [view, refreshComputer, refreshChanges]);
 
   useEffect(() => {
     void (async () => {
@@ -767,6 +822,20 @@ function App() {
     }
   }
 
+  async function loadGitDiff(file: GitFile): Promise<void> {
+    setSelectedGitPath(file.path);
+    try {
+      const staged = file.worktree === " " && file.index !== " ";
+      setGitDiff(
+        (await window.homuncula.gitDiff(file.path, staged)) as GitDiff
+      );
+      setError(null);
+    } catch (cause) {
+      setGitDiff(null);
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
   async function searchMemory(event: FormEvent): Promise<void> {
     event.preventDefault();
     setBusy(true);
@@ -844,6 +913,7 @@ function App() {
             [
               ["home", "Home"],
               ["work", "Work"],
+              ["changes", "Changes"],
               ["memory", "Memory"],
               ["findings", "Findings"],
               ["permissions", "Permissions"],
@@ -1302,6 +1372,73 @@ function App() {
                   </div>
                 ))}
               </div>
+            </div>
+          </section>
+        )}
+
+        {view === "changes" && (
+          <section className="git-layout">
+            <div className="card git-files">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Git workspace</span>
+                  <h2>{gitState?.branch || "Repository"}</h2>
+                </div>
+                <button
+                  className="ghost"
+                  onClick={() => void refreshChanges()}
+                  type="button"
+                >
+                  Refresh
+                </button>
+              </div>
+              <div className="git-stats">
+                <span>{gitState?.root || "No Git repository available"}</span>
+                {gitState?.working_stat && <pre>{gitState.working_stat}</pre>}
+                {gitState?.staged_stat && <pre>{gitState.staged_stat}</pre>}
+              </div>
+              <div className="git-file-list">
+                {gitState && gitState.files.length === 0 && (
+                  <div className="empty">Working tree is clean.</div>
+                )}
+                {gitState?.files.map((file) => (
+                  <button
+                    className={
+                      selectedGitPath === file.path
+                        ? "git-file-row selected"
+                        : "git-file-row"
+                    }
+                    key={file.path}
+                    onClick={() => void loadGitDiff(file)}
+                    type="button"
+                  >
+                    <code>{file.index}{file.worktree}</code>
+                    <span>{file.path}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="card diff-view">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Read-only diff</span>
+                  <h2>{gitDiff?.path || "Select a changed file"}</h2>
+                </div>
+                <div className="diff-badges">
+                  {gitDiff?.staged && <span className="badge">staged</span>}
+                  {gitDiff?.truncated && <span className="badge">truncated</span>}
+                </div>
+              </div>
+              {gitDiff ? (
+                <pre className="diff-pre">
+                  {gitDiff.diff || "No textual diff is available for this file."}
+                </pre>
+              ) : (
+                <div className="empty diff-empty">
+                  Choose a changed file to inspect its diff.
+                </div>
+              )}
             </div>
           </section>
         )}
