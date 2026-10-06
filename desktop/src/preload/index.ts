@@ -6,6 +6,13 @@ async function request(path: string, method = "GET", body?: unknown): Promise<an
 
 contextBridge.exposeInMainWorld("homuncula", {
   health: () => request("/health"),
+  voiceStatus: () => request("/voice/status"),
+  installVoice: (component: "asr" | "tts") =>
+    request("/voice/install", "POST", { component }),
+  transcribeVoice: (audio: Uint8Array) =>
+    ipcRenderer.invoke("homuncula:voice-transcribe", audio),
+  synthesizeVoice: (text: string, speaker = 10, speed = 1.0) =>
+    ipcRenderer.invoke("homuncula:voice-synthesize", text, speaker, speed),
   installOllama: () => ipcRenderer.invoke("homuncula:install-ollama"),
   restartHost: () => ipcRenderer.invoke("homuncula:restart-backend"),
   startupSettings: () => ipcRenderer.invoke("homuncula:startup-settings"),
