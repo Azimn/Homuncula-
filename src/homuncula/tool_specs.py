@@ -87,6 +87,57 @@ TOOLS = [
         required=["query"],
     ),
     function_tool(
+        "evidence_capture",
+        "Persist an externally derived observation with exact source provenance before treating it as durable knowledge.",
+        {
+            "source_kind": {"type": "string"},
+            "source_locator": {"type": "string"},
+            "source_title": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        required=["source_kind", "source_locator", "content"],
+    ),
+    function_tool(
+        "evidence_dossier",
+        "Create a claim dossier from previously captured observation IDs. New dossiers remain HOLD until reviewed.",
+        {
+            "claim": {"type": "string"},
+            "observation_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 20,
+            },
+            "unknowns": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        required=["claim", "observation_ids"],
+    ),
+    function_tool(
+        "evidence_review",
+        "Run the local four-role epistemic council over a dossier. Invalid or incomplete review output fails to HOLD.",
+        {"dossier_id": {"type": "string"}},
+        required=["dossier_id"],
+    ),
+    function_tool(
+        "evidence_status",
+        "Read a durable evidence dossier, its provenance, review history, verdict, and unresolved unknowns.",
+        {"dossier_id": {"type": "string"}},
+        required=["dossier_id"],
+    ),
+    function_tool(
+        "evidence_promote",
+        "Promote the exact reviewed claim from a PASS dossier into durable memory. HOLD and REJECT dossiers cannot be promoted.",
+        {
+            "dossier_id": {"type": "string"},
+            "scope": {"type": "string", "default": "global"},
+            "kind": {"type": "string", "default": "fact"},
+        },
+        required=["dossier_id"],
+    ),
+    function_tool(
         "remember",
         "Store a durable fact, preference, decision, relationship fact, or commitment.",
         {
