@@ -449,7 +449,7 @@ class HomunculaRuntime:
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
             self.activity(
                 "review.failed",
                 str(exc),
