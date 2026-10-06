@@ -4,6 +4,7 @@ import os
 import signal
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from typing import BinaryIO, Mapping
 
@@ -119,15 +120,12 @@ def isolation_popen_kwargs() -> dict[str, object]:
     return {"start_new_session": True}
 
 
-def terminate_process_tree(
-    process: subprocess.Popen[bytes],
+def terminate_pid_tree(
+    pid: int,
     *,
     grace_seconds: float = 1.0,
 ) -> None:
-    """Best-effort process-tree termination for Homuncula-launched commands."""
-
-    if process.poll() is not None:
-        return
+    """Best-effort termination for an isolated process group/tree."""
 
     if os.name == "nt":
         try:
@@ -135,7 +133,7 @@ def terminate_process_tree(
                 [
                     "taskkill",
                     "/PID",
-                    str(process.pid),
+                    str(pid),
                     "/T",
                     "/F",
                 ],
@@ -146,19 +144,33 @@ def terminate_process_tree(
                 env=sanitized_process_environment(),
             )
         except (OSError, subprocess.SubprocessError):
-            process.kill()
+            return
         return
 
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
-        process.terminate()
+        return
+    time.sleep(max(0.0, grace_seconds))
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
         return
 
-    try:
-        process.wait(timeout=max(0.1, grace_seconds))
-    except subprocess.TimeoutExpired:
+
+def terminate_process_tree(
+    process: subprocess.Popen[bytes],
+    *,
+    grace_seconds: float = 1.0,
+) -> None:
+    """Terminate a foreground command and its isolated descendants."""
+
+    if process.poll() is not None:
+        return
+
+    terminate_pid_tree(process.pid, grace_seconds=grace_seconds)
+    if process.poll() is None:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
             process.kill()
+        except OSError:
+            pass
