@@ -14,7 +14,7 @@ import { electronApp, is } from "@electron-toolkit/utils";
 
 const API_BASE = "http://127.0.0.1:43900";
 const ALLOWED_API_PATH =
-  /^\/(health|state|runtime|threads|responsibilities|actions|grants|activity|memory|findings|processes|subscriptions|secrets|computer|plans|skills|verification)(\/|\?|$)/;
+  /^\/(health|state|runtime|threads|responsibilities|actions|grants|activity|memory|findings|processes|subscriptions|secrets|computer|plans|skills|verification|models)(\/|\?|$)/;
 
 let backend: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
@@ -103,6 +103,49 @@ function startBackend(): void {
   });
 }
 
+async function runHostCommand(command: string, args: string[]): Promise<{
+  returncode: number | null;
+  stdout: string;
+  stderr: string;
+}> {
+  return new Promise((resolveCommand, rejectCommand) => {
+    const child = spawn(command, args, {
+      windowsHide: false,
+      stdio: "pipe"
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => {
+      stdout = (stdout + chunk.toString()).slice(-100000);
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr = (stderr + chunk.toString()).slice(-100000);
+    });
+    child.once("error", rejectCommand);
+    child.once("exit", (code) => {
+      resolveCommand({ returncode: code, stdout, stderr });
+    });
+  });
+}
+
+async function installOllama(): Promise<{
+  returncode: number | null;
+  stdout: string;
+  stderr: string;
+}> {
+  if (process.platform !== "win32") {
+    throw new Error("One-click Ollama installation is currently available on Windows only.");
+  }
+  return runHostCommand("winget", [
+    "install",
+    "--id",
+    "Ollama.Ollama",
+    "-e",
+    "--accept-package-agreements",
+    "--accept-source-agreements"
+  ]);
+}
+
 async function restartBackend(): Promise<void> {
   const current = backend;
   backend = null;
@@ -123,6 +166,8 @@ async function restartBackend(): Promise<void> {
 }
 
 function installApiBridge(): void {
+  ipcMain.handle("homuncula:install-ollama", async () => installOllama());
+
   ipcMain.handle("homuncula:restart-backend", async () => {
     await restartBackend();
     return { restarted: true };
