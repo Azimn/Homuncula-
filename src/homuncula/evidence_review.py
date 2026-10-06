@@ -5,7 +5,9 @@ import re
 import uuid
 from typing import Any
 
-from .evidence import EvidenceStore, REVIEW_ROLES, VALID_VERDICTS
+import httpx
+
+from .evidence import REVIEW_ROLES, VALID_VERDICTS, EvidenceStore
 from .provider import OllamaProvider
 
 
@@ -84,7 +86,7 @@ def normalize_review(
 
     reasons_raw = data.get("reasons")
     if not isinstance(reasons_raw, list):
-        raise ValueError("Evidence review reasons must be a list")
+        raise TypeError("Evidence review reasons must be a list")
     reasons = [
         str(item).strip()[:2000]
         for item in reasons_raw[:8]
@@ -95,7 +97,7 @@ def normalize_review(
 
     evidence_raw = data.get("evidence_ids")
     if not isinstance(evidence_raw, list):
-        raise ValueError("Evidence review evidence_ids must be a list")
+        raise TypeError("Evidence review evidence_ids must be a list")
     evidence_ids = [
         str(item).strip()
         for item in evidence_raw[:20]
@@ -109,7 +111,7 @@ def normalize_review(
 
     unknowns_raw = data.get("unknowns", [])
     if not isinstance(unknowns_raw, list):
-        raise ValueError("Evidence review unknowns must be a list")
+        raise TypeError("Evidence review unknowns must be a list")
     unknowns = [
         str(item).strip()[:2000]
         for item in unknowns_raw[:12]
@@ -187,7 +189,7 @@ class EvidenceCouncil:
                     unknowns=normalized["unknowns"],
                     valid=True,
                 )
-            except Exception as exc:
+            except (httpx.HTTPError, OSError, RuntimeError, TypeError, ValueError) as exc:
                 self.evidence.record_review(
                     dossier_id,
                     round_id,
