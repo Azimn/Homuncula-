@@ -23,8 +23,8 @@ class ContextCompiler:
         self,
         db: Database,
         memory: MemoryStore,
-        plans: PlanStore,
-        skills: SkillStore,
+        plans: PlanStore | None = None,
+        skills: SkillStore | None = None,
         *,
         token_budget: int = 12000,
     ):
@@ -102,7 +102,7 @@ class ContextCompiler:
                 reserve=self.token_budget // 2,
             )
 
-        matched_skills = self.skills.search(query, limit=3)
+        matched_skills = self.skills.search(query, limit=3) if self.skills else []
         if matched_skills:
             skill_blocks: list[str] = []
             for skill in matched_skills:
@@ -136,7 +136,7 @@ class ContextCompiler:
                 reserve=self.token_budget // 3,
             )
 
-            plan = self.plans.active(responsibility_id)
+            plan = self.plans.active(responsibility_id) if self.plans else None
             if plan:
                 plan_id = plan["id"]
                 step_lines = []
