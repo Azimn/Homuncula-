@@ -6,6 +6,10 @@ declare global {
       health: () => Promise<any>;
       installOllama: () => Promise<any>;
       restartHost: () => Promise<any>;
+      startupSettings: () => Promise<{ supported: boolean; openAtLogin: boolean }>;
+      setLaunchAtLogin: (
+        enabled: boolean
+      ) => Promise<{ supported: boolean; openAtLogin: boolean }>;
       state: () => Promise<any>;
       pauseAutonomy: () => Promise<any>;
       resumeAutonomy: () => Promise<any>;
