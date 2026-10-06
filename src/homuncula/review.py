@@ -76,7 +76,7 @@ def parse_review_json(content: str) -> dict[str, Any]:
         text = re.sub(r"\\s*```$", "", text)
     data = json.loads(text)
     if not isinstance(data, dict):
-        raise ValueError("Review output must be a JSON object")
+        raise TypeError("Review output must be a JSON object")
     return data
 
 
