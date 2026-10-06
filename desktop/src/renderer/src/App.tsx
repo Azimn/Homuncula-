@@ -1,6 +1,6 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-type View = "home" | "memory" | "findings" | "permissions" | "computer" | "activity";
+type View = "home" | "work" | "memory" | "findings" | "permissions" | "computer" | "activity";
 
 type Health = {
   ok: boolean;
@@ -100,6 +100,120 @@ type WindowRecord = {
   class_name?: string | null;
 };
 
+type PlanStep = {
+  id: string;
+  position: number;
+  title: string;
+  detail: string;
+  status: string;
+  summary?: string | null;
+};
+
+type Plan = {
+  id: string;
+  responsibility_id: string;
+  title: string;
+  goal: string;
+  status: string;
+  current_step?: number | null;
+  updated_at: string;
+  steps: PlanStep[];
+};
+
+type Skill = {
+  name: string;
+  description: string;
+  instructions: string;
+  allowed_tools: string[];
+  source: string;
+};
+
+type Verification = {
+  id: string;
+  responsibility_id?: string | null;
+  kind: string;
+  command: string[];
+  cwd: string;
+  status: string;
+  returncode: number;
+  stdout_summary: string;
+  stderr_summary: string;
+  created_at: string;
+};
+
+type StartupState = {
+  supported: boolean;
+  openAtLogin: boolean;
+};
+
+type ModelState = {
+  ok: boolean;
+  selected: string;
+  available: string[];
+  error?: string;
+};
+
+type VoiceState = {
+  engine_available: boolean;
+  asr: {
+    installed: boolean;
+    model: string;
+  };
+  tts: {
+    installed: boolean;
+    model: string;
+    speakers: number;
+    default_speaker: number;
+  };
+};
+
+function encodeMonoWav(buffer: AudioBuffer, targetRate = 16000): Uint8Array {
+  const sourceRate = buffer.sampleRate;
+  const length = Math.max(1, Math.round(buffer.duration * targetRate));
+  const mono = new Float32Array(length);
+
+  for (let index = 0; index < length; index += 1) {
+    const sourcePosition = (index * sourceRate) / targetRate;
+    const left = Math.floor(sourcePosition);
+    const right = Math.min(left + 1, buffer.length - 1);
+    const mix = sourcePosition - left;
+    let sample = 0;
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      const values = buffer.getChannelData(channel);
+      const a = values[Math.min(left, values.length - 1)] || 0;
+      const b = values[Math.min(right, values.length - 1)] || 0;
+      sample += a + (b - a) * mix;
+    }
+    mono[index] = Math.max(-1, Math.min(1, sample / buffer.numberOfChannels));
+  }
+
+  const bytes = new Uint8Array(44 + mono.length * 2);
+  const view = new DataView(bytes.buffer);
+  const writeText = (offset: number, value: string): void => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+
+  writeText(0, "RIFF");
+  view.setUint32(4, 36 + mono.length * 2, true);
+  writeText(8, "WAVE");
+  writeText(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, targetRate, true);
+  view.setUint32(28, targetRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeText(36, "data");
+  view.setUint32(40, mono.length * 2, true);
+  for (let index = 0; index < mono.length; index += 1) {
+    view.setInt16(44 + index * 2, Math.round(mono[index] * 32767), true);
+  }
+  return bytes;
+}
+
 type ChatLine = {
   role: "user" | "assistant" | "system";
   content: string;
@@ -110,6 +224,11 @@ const VIEW_COPY: Record<View, { eyebrow: string; title: string; subtitle: string
     eyebrow: "Persistent local intelligence",
     title: "Stay responsible, not merely responsive.",
     subtitle: "Conversation, active responsibilities, and decisions that need you."
+  },
+  work: {
+    eyebrow: "Durable execution",
+    title: "Plans, skills, and proof of work.",
+    subtitle: "See what the agent intends to do, what reusable procedures it knows, and what checks actually passed."
   },
   memory: {
     eyebrow: "Inspectable memory",
@@ -160,8 +279,35 @@ function App() {
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [grants, setGrants] = useState<Grant[]>([]);
   const [processes, setProcesses] = useState<ProcessRecord[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [verification, setVerification] = useState<Verification[]>([]);
   const [windows, setWindows] = useState<WindowRecord[]>([]);
   const [computer, setComputer] = useState<any>(null);
+  const [models, setModels] = useState<ModelState | null>(null);
+  const [modelInput, setModelInput] = useState("qwen3:8b");
+  const [modelBusy, setModelBusy] = useState(false);
+  const [modelMessage, setModelMessage] = useState<string | null>(null);
+  const [voice, setVoice] = useState<VoiceState | null>(null);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [voiceReplies, setVoiceReplies] = useState(
+    () => window.localStorage.getItem("homuncula.voiceReplies") === "1"
+  );
+  const [voiceSpeaker, setVoiceSpeaker] = useState(
+    () => Number(window.localStorage.getItem("homuncula.voiceSpeaker") || "10")
+  );
+  const [voiceSpeed, setVoiceSpeed] = useState(
+    () => Number(window.localStorage.getItem("homuncula.voiceSpeed") || "1")
+  );
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const voiceStreamRef = useRef<MediaStream | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
+  const [startup, setStartup] = useState<StartupState>({
+    supported: false,
+    openAtLogin: false
+  });
 
   const [threadId, setThreadId] = useState<string | null>(null);
   const [chat, setChat] = useState<ChatLine[]>([
@@ -196,7 +342,12 @@ function App() {
         nextFindings,
         nextMemories,
         nextGrants,
-        nextProcesses
+        nextProcesses,
+        nextPlans,
+        nextSkills,
+        nextVerification,
+        nextModels,
+        nextVoice
       ] = await Promise.all([
         window.homuncula.health(),
         window.homuncula.state(),
@@ -206,7 +357,12 @@ function App() {
         window.homuncula.findings(),
         window.homuncula.memory(),
         window.homuncula.grants(),
-        window.homuncula.processes()
+        window.homuncula.processes(),
+        window.homuncula.plans(),
+        window.homuncula.skills(),
+        window.homuncula.verification(),
+        window.homuncula.models(),
+        window.homuncula.voiceStatus()
       ]);
 
       setHealth(nextHealth as Health);
@@ -218,6 +374,14 @@ function App() {
       setMemories(nextMemories as MemoryRecord[]);
       setGrants(nextGrants as Grant[]);
       setProcesses(nextProcesses as ProcessRecord[]);
+      setPlans(nextPlans as Plan[]);
+      setSkills(nextSkills as Skill[]);
+      setVerification(nextVerification as Verification[]);
+      setModels(nextModels as ModelState);
+      setVoice(nextVoice as VoiceState);
+      if ((nextModels as ModelState).selected) {
+        setModelInput((nextModels as ModelState).selected);
+      }
       setBackendReady(true);
       setError(null);
     } catch (cause) {
@@ -228,12 +392,14 @@ function App() {
 
   const refreshComputer = useCallback(async () => {
     try {
-      const [status, windowState] = await Promise.all([
+      const [status, windowState, startupState] = await Promise.all([
         window.homuncula.computerStatus(),
-        window.homuncula.windows().catch(() => ({ windows: [] }))
+        window.homuncula.windows().catch(() => ({ windows: [] })),
+        window.homuncula.startupSettings()
       ]);
       setComputer(status);
       setWindows(windowState.windows || []);
+      setStartup(startupState as StartupState);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -305,6 +471,9 @@ function App() {
         ...current,
         { role: "assistant", content: result.content }
       ]);
+      if (voiceReplies && voice?.tts.installed) {
+        void speakText(String(result.content || ""));
+      }
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -325,6 +494,221 @@ function App() {
       setResponsibilityTitle("");
       setResponsibilityObjective("");
       await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function installOllama(): Promise<void> {
+    setModelBusy(true);
+    setModelMessage("Installing Ollama on Windows...");
+    try {
+      const result = await window.homuncula.installOllama();
+      if (result.returncode !== 0) {
+        throw new Error(result.stderr || result.stdout || "Ollama installation failed.");
+      }
+      setModelMessage("Ollama installed. Restarting the local host...");
+      await window.homuncula.restartHost();
+      setBackendReady(false);
+    } catch (cause) {
+      setModelMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setModelBusy(false);
+    }
+  }
+
+  async function pullModel(): Promise<void> {
+    const name = modelInput.trim();
+    if (!name) return;
+    setModelBusy(true);
+    setModelMessage("Pulling " + name + " locally. Large models can take a while.");
+    try {
+      await window.homuncula.pullModel(name);
+      setModelMessage(name + " is installed and selected.");
+      await refresh();
+    } catch (cause) {
+      setModelMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setModelBusy(false);
+    }
+  }
+
+  async function selectModel(name: string): Promise<void> {
+    setModelBusy(true);
+    try {
+      await window.homuncula.selectModel(name);
+      setModelInput(name);
+      setModelMessage(name + " selected.");
+      await refresh();
+    } catch (cause) {
+      setModelMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setModelBusy(false);
+    }
+  }
+
+  async function installVoice(component: "asr" | "tts"): Promise<void> {
+    setVoiceBusy(true);
+    setVoiceMessage(
+      component === "asr"
+        ? "Downloading the local speech recognition model..."
+        : "Downloading the local Kokoro voice model..."
+    );
+    try {
+      const next = await window.homuncula.installVoice(component);
+      setVoice(next as VoiceState);
+      setVoiceMessage(
+        component === "asr"
+          ? "Local speech recognition is ready."
+          : "Local Kokoro speech output is ready."
+      );
+    } catch (cause) {
+      setVoiceMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setVoiceBusy(false);
+    }
+  }
+
+  async function speakText(text: string): Promise<void> {
+    if (!voice?.tts.installed || !text.trim()) return;
+    setVoiceBusy(true);
+    try {
+      const bytes = await window.homuncula.synthesizeVoice(
+        text,
+        voiceSpeaker,
+        voiceSpeed
+      );
+      const copy = new Uint8Array(bytes);
+      const blob = new Blob([copy.buffer], { type: "audio/wav" });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.addEventListener(
+        "ended",
+        () => URL.revokeObjectURL(url),
+        { once: true }
+      );
+      audio.addEventListener(
+        "error",
+        () => URL.revokeObjectURL(url),
+        { once: true }
+      );
+      await audio.play();
+    } catch (cause) {
+      setVoiceMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setVoiceBusy(false);
+    }
+  }
+
+  async function startRecording(): Promise<void> {
+    if (!voice?.asr.installed || recording) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true
+        },
+        video: false
+      });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "";
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+      voiceChunksRef.current = [];
+      voiceStreamRef.current = stream;
+      recorderRef.current = recorder;
+      recorder.addEventListener("dataavailable", (event) => {
+        if (event.data.size > 0) voiceChunksRef.current.push(event.data);
+      });
+      recorder.start();
+      setRecording(true);
+      setVoiceMessage("Listening locally...");
+    } catch (cause) {
+      setVoiceMessage(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  async function stopRecording(): Promise<void> {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+
+    setVoiceBusy(true);
+    try {
+      await new Promise<void>((resolveStop) => {
+        recorder.addEventListener("stop", () => resolveStop(), { once: true });
+        recorder.stop();
+      });
+      const blob = new Blob(voiceChunksRef.current, {
+        type: recorder.mimeType || "audio/webm"
+      });
+      const encoded = await blob.arrayBuffer();
+      const context = new AudioContext();
+      try {
+        const decoded = await context.decodeAudioData(encoded.slice(0));
+        const wav = encodeMonoWav(decoded, 16000);
+        const result = await window.homuncula.transcribeVoice(wav);
+        const text = String(result.text || "").trim();
+        if (text) {
+          setPrompt((current) => current.trim() ? current.trim() + " " + text : text);
+          setVoiceMessage("Transcribed locally.");
+        } else {
+          setVoiceMessage("No speech was detected.");
+        }
+      } finally {
+        await context.close();
+      }
+    } catch (cause) {
+      setVoiceMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+      voiceStreamRef.current = null;
+      recorderRef.current = null;
+      voiceChunksRef.current = [];
+      setRecording(false);
+      setVoiceBusy(false);
+    }
+  }
+
+  function setSpokenReplies(enabled: boolean): void {
+    setVoiceReplies(enabled);
+    window.localStorage.setItem("homuncula.voiceReplies", enabled ? "1" : "0");
+  }
+
+  function updateVoiceSpeaker(value: number): void {
+    const next = Math.max(0, Math.min(10, Math.round(value)));
+    setVoiceSpeaker(next);
+    window.localStorage.setItem("homuncula.voiceSpeaker", String(next));
+  }
+
+  function updateVoiceSpeed(value: number): void {
+    const next = Math.max(0.5, Math.min(2.0, value));
+    setVoiceSpeed(next);
+    window.localStorage.setItem("homuncula.voiceSpeed", String(next));
+  }
+
+  async function restartHost(): Promise<void> {
+    setBusy(true);
+    setBackendReady(false);
+    try {
+      await window.homuncula.restartHost();
+      setError("Local host restarted. Health checks will reconnect automatically.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleLaunchAtLogin(): Promise<void> {
+    setBusy(true);
+    try {
+      const next = await window.homuncula.setLaunchAtLogin(!startup.openAtLogin);
+      setStartup(next as StartupState);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -459,6 +843,7 @@ function App() {
           {(
             [
               ["home", "Home"],
+              ["work", "Work"],
               ["memory", "Memory"],
               ["findings", "Findings"],
               ["permissions", "Permissions"],
@@ -530,10 +915,166 @@ function App() {
             Autonomous wakes are paused. Direct conversation and inspection still work.
           </div>
         )}
-        {error && <div className="error-banner">{error}</div>}
+        {error && (
+          <div className="error-banner">
+            <span>{error}</span>
+            {!backendReady && (
+              <button className="ghost" disabled={busy} onClick={() => void restartHost()} type="button">
+                Restart host
+              </button>
+            )}
+          </div>
+        )}
 
         {view === "home" && (
           <>
+
+            {(!health?.provider?.ok || health.provider.selected_available === false || modelMessage) && (
+              <section className="model-setup card">
+                <div className="card-heading">
+                  <div>
+                    <span className="eyebrow">Local model setup</span>
+                    <h2>
+                      {!health?.provider?.ok
+                        ? "Connect the local inference engine"
+                        : health.provider.selected_available === false
+                          ? "Install the selected model"
+                          : "Local model ready"}
+                    </h2>
+                  </div>
+                  <span className={health?.provider?.ok ? "badge active" : "badge failed"}>
+                    {health?.provider?.ok ? "Ollama detected" : "Ollama unavailable"}
+                  </span>
+                </div>
+                <div className="model-setup-body">
+                  {!health?.provider?.ok && (
+                    <div className="model-step">
+                      <div>
+                        <strong>1. Install Ollama</strong>
+                        <p>Homuncula uses the local Ollama service by default. Installation is performed directly on this Windows PC.</p>
+                      </div>
+                      <button disabled={modelBusy} onClick={() => void installOllama()} type="button">
+                        Install Ollama
+                      </button>
+                    </div>
+                  )}
+                  <div className="model-step">
+                    <div>
+                      <strong>{health?.provider?.ok ? "Choose or install a model" : "2. Install a model after Ollama starts"}</strong>
+                      <p>The model stays on this machine. The default is qwen3:8b, but any installed Ollama chat model can be selected.</p>
+                    </div>
+                    <div className="model-controls">
+                      <input
+                        value={modelInput}
+                        onChange={(event) => setModelInput(event.target.value)}
+                        placeholder="qwen3:8b"
+                      />
+                      <button
+                        disabled={modelBusy || !health?.provider?.ok || !modelInput.trim()}
+                        onClick={() => void pullModel()}
+                        type="button"
+                      >
+                        Pull model
+                      </button>
+                    </div>
+                  </div>
+                  {models?.available?.length ? (
+                    <div className="model-list">
+                      {models.available.map((name) => (
+                        <button
+                          className={name === models.selected ? "model-choice selected" : "model-choice"}
+                          disabled={modelBusy}
+                          key={name}
+                          onClick={() => void selectModel(name)}
+                          type="button"
+                        >
+                          <strong>{name}</strong>
+                          <span>{name === models.selected ? "Selected" : "Use model"}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {modelMessage && <div className="model-message">{modelMessage}</div>}
+                </div>
+              </section>
+            )}
+
+            {voice && (!voice.asr.installed || !voice.tts.installed || voiceMessage) && (
+              <section className="voice-setup card">
+                <div className="card-heading">
+                  <div>
+                    <span className="eyebrow">Local voice</span>
+                    <h2>Private speech input and output</h2>
+                  </div>
+                  <span className={voice.engine_available ? "badge active" : "badge failed"}>
+                    {voice.engine_available ? "Voice runtime ready" : "Voice runtime unavailable"}
+                  </span>
+                </div>
+                <div className="voice-setup-body">
+                  <div className="voice-component">
+                    <div>
+                      <strong>Speech recognition</strong>
+                      <p>{voice.asr.installed ? "Whisper tiny.en int8 is installed." : "Download the local Whisper speech recognition model."}</p>
+                    </div>
+                    <button
+                      disabled={voiceBusy || voice.asr.installed || !voice.engine_available}
+                      onClick={() => void installVoice("asr")}
+                      type="button"
+                    >
+                      {voice.asr.installed ? "Installed" : "Install speech input"}
+                    </button>
+                  </div>
+                  <div className="voice-component">
+                    <div>
+                      <strong>Speech output</strong>
+                      <p>{voice.tts.installed ? "Kokoro voice output is installed." : "Download the high-quality local Kokoro voice model."}</p>
+                    </div>
+                    <button
+                      disabled={voiceBusy || voice.tts.installed || !voice.engine_available}
+                      onClick={() => void installVoice("tts")}
+                      type="button"
+                    >
+                      {voice.tts.installed ? "Installed" : "Install Kokoro voice"}
+                    </button>
+                  </div>
+                  {voice.tts.installed && (
+                    <div className="voice-preferences">
+                      <label>
+                        Speaker
+                        <input
+                          max={10}
+                          min={0}
+                          onChange={(event) => updateVoiceSpeaker(Number(event.target.value))}
+                          type="number"
+                          value={voiceSpeaker}
+                        />
+                      </label>
+                      <label>
+                        Speed
+                        <input
+                          max={2}
+                          min={0.5}
+                          onChange={(event) => updateVoiceSpeed(Number(event.target.value))}
+                          step={0.05}
+                          type="number"
+                          value={voiceSpeed}
+                        />
+                      </label>
+                      <button
+                        className="ghost"
+                        disabled={voiceBusy}
+                        onClick={() => void speakText("Homuncula local voice is ready.")}
+                        type="button"
+                      >
+                        Test voice
+                      </button>
+                    </div>
+                  )}
+                  {voiceMessage && <div className="model-message">{voiceMessage}</div>}
+                </div>
+              </section>
+            )}
+
             <section className="metrics-row">
               <div><span>Active responsibilities</span><strong>{activeCount}</strong></div>
               <div><span>New findings</span><strong>{newFindingCount}</strong></div>
@@ -573,12 +1114,32 @@ function App() {
                 </div>
 
                 <form className="composer" onSubmit={sendMessage}>
+                  <div className="composer-main">
                   <textarea
                     value={prompt}
                     onChange={(event) => setPrompt(event.target.value)}
                     placeholder="Ask, delegate, investigate, or create something"
                     rows={3}
                   />
+                  <div className="voice-controls">
+                    <button
+                      className={recording ? "voice-button recording" : "voice-button ghost"}
+                      disabled={voiceBusy || !voice?.asr.installed}
+                      onClick={() => void (recording ? stopRecording() : startRecording())}
+                      type="button"
+                    >
+                      {recording ? "Stop" : "Mic"}
+                    </button>
+                    <button
+                      className={voiceReplies ? "voice-button active" : "voice-button ghost"}
+                      disabled={!voice?.tts.installed}
+                      onClick={() => setSpokenReplies(!voiceReplies)}
+                      type="button"
+                    >
+                      {voiceReplies ? "Voice on" : "Voice off"}
+                    </button>
+                  </div>
+                  </div>
                   <button disabled={busy || !prompt.trim()} type="submit">
                     Send
                   </button>
@@ -652,6 +1213,97 @@ function App() {
               </div>
             </section>
           </>
+        )}
+
+
+        {view === "work" && (
+          <section className="computer-layout">
+            <div className="card span-two">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Execution state</span>
+                  <h2>Durable plans</h2>
+                </div>
+                <span className="count">{plans.length}</span>
+              </div>
+              <div className="compact-list">
+                {plans.length === 0 && (
+                  <div className="empty">
+                    Plans appear when a persistent responsibility prepares mutating work.
+                  </div>
+                )}
+                {plans.map((plan) => (
+                  <div className="approval" key={plan.id}>
+                    <div>
+                      <strong>{plan.title}</strong>
+                      <p>{plan.goal}</p>
+                      <span>{plan.status} · {plan.steps.filter((step) => step.status === "complete").length}/{plan.steps.length} complete</span>
+                    </div>
+                    <div className="compact-list">
+                      {plan.steps.map((step) => (
+                        <div className="grant-row" key={step.id}>
+                          <div>
+                            <strong>{step.position}. {step.title}</strong>
+                            <span>{step.status}{step.summary ? " · " + step.summary : ""}</span>
+                          </div>
+                          <span className={"badge " + step.status}>{step.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Reusable procedures</span>
+                  <h2>Local skills</h2>
+                </div>
+                <span className="count">{skills.length}</span>
+              </div>
+              <div className="compact-list">
+                {skills.length === 0 && (
+                  <div className="empty">No local skills have been installed yet.</div>
+                )}
+                {skills.map((skill) => (
+                  <div className="grant-row" key={skill.name}>
+                    <div>
+                      <strong>{skill.name}</strong>
+                      <span>{skill.description}</span>
+                      <span>{skill.allowed_tools.length ? skill.allowed_tools.join(", ") : "No declared tool guidance"}</span>
+                    </div>
+                    <span className="badge">{skill.source}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-heading">
+                <div>
+                  <span className="eyebrow">Verification ledger</span>
+                  <h2>Latest evidence</h2>
+                </div>
+                <span className="count">{verification.length}</span>
+              </div>
+              <div className="compact-list">
+                {verification.length === 0 && (
+                  <div className="empty">No test, quality, build, or inspection evidence has been recorded.</div>
+                )}
+                {verification.slice(0, 20).map((item) => (
+                  <div className="grant-row" key={item.id}>
+                    <div>
+                      <strong>{item.kind} · {item.command.join(" ")}</strong>
+                      <span>{item.cwd} · exit {item.returncode} · {relativeTime(item.created_at)}</span>
+                    </div>
+                    <span className={"badge " + item.status}>{item.status}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
         )}
 
         {view === "memory" && (
@@ -867,6 +1519,26 @@ function App() {
                 <div><span>Browser</span><strong>{computer?.browser?.started ? computer.browser.url || "Open" : "Idle"}</strong></div>
                 <div><span>Browser engine</span><strong>{computer?.browser?.channel || health?.browser_channel || "Unknown"}</strong></div>
                 <div><span>Autonomy</span><strong>{autonomyPaused ? "Paused" : "Running"}</strong></div>
+                <div>
+                  <span>Launch at login</span>
+                  <strong>
+                    {startup.supported
+                      ? startup.openAtLogin
+                        ? "Enabled"
+                        : "Disabled"
+                      : "Available in packaged app"}
+                  </strong>
+                </div>
+              </div>
+              <div className="computer-actions">
+                <button
+                  className="ghost"
+                  disabled={busy || !startup.supported}
+                  onClick={() => void toggleLaunchAtLogin()}
+                  type="button"
+                >
+                  {startup.openAtLogin ? "Disable launch at login" : "Enable launch at login"}
+                </button>
               </div>
             </div>
 
