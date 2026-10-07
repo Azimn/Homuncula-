@@ -87,8 +87,57 @@ TOOLS = [
         required=["query"],
     ),
     function_tool(
+        "evidence_capture",
+        "Persist evidence from a verified read receipt returned by a Homuncula read tool. The optional excerpt must exactly match receipt text.",
+        {
+            "receipt_id": {"type": "string"},
+            "excerpt": {"type": "string"},
+        },
+        required=["receipt_id"],
+    ),
+    function_tool(
+        "evidence_dossier",
+        "Create a claim dossier from previously captured observation IDs. New dossiers remain HOLD until reviewed.",
+        {
+            "claim": {"type": "string"},
+            "observation_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 20,
+            },
+            "unknowns": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        required=["claim", "observation_ids"],
+    ),
+    function_tool(
+        "evidence_review",
+        "Run the local four-role epistemic council over a dossier. Invalid or incomplete review output fails to HOLD.",
+        {"dossier_id": {"type": "string"}},
+        required=["dossier_id"],
+    ),
+    function_tool(
+        "evidence_status",
+        "Read a durable evidence dossier, its provenance, review history, verdict, and unresolved unknowns.",
+        {"dossier_id": {"type": "string"}},
+        required=["dossier_id"],
+    ),
+    function_tool(
+        "evidence_promote",
+        "Promote the exact reviewed claim from a PASS dossier into durable memory. HOLD and REJECT dossiers cannot be promoted.",
+        {
+            "dossier_id": {"type": "string"},
+            "scope": {"type": "string", "default": "global"},
+            "kind": {"type": "string", "default": "fact"},
+        },
+        required=["dossier_id"],
+    ),
+    function_tool(
         "remember",
-        "Store a durable fact, preference, decision, relationship fact, or commitment.",
+        "Store user-provided or internally owned durable facts, preferences, decisions, relationship facts, or commitments. External factual claims should use the evidence gate.",
         {
             "content": {"type": "string"},
             "scope": {"type": "string", "default": "global"},
@@ -200,6 +249,17 @@ TOOLS = [
             "intent": {"type": "string"},
         },
         required=["ref", "path", "intent"],
+    ),
+    function_tool(
+        "browser_download",
+        "Propose downloading from a referenced browser control into the local workspace.",
+        {
+            "ref": {"type": "string"},
+            "directory": {"type": "string", "default": "downloads"},
+            "max_mb": {"type": "integer", "default": 250, "minimum": 1, "maximum": 2048},
+            "intent": {"type": "string"},
+        },
+        required=["ref", "intent"],
     ),
     function_tool(
         "windows_list",

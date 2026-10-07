@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, Tray } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
@@ -14,13 +14,17 @@ import { electronApp, is } from "@electron-toolkit/utils";
 
 const API_BASE = "http://127.0.0.1:43900";
 const ALLOWED_API_PATH =
-  /^\/(health|state|runtime|threads|responsibilities|actions|grants|activity|memory|findings|processes|subscriptions|secrets|computer)(\/|\?|$)/;
+  /^\/(health|state|runtime|threads|responsibilities|actions|grants|activity|memory|findings|processes|subscriptions|secrets|computer|plans|skills|verification|models|voice)(\/|\?|$)/;
 
 let backend: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
 let ownerToken = "";
+let notificationTimer: NodeJS.Timeout | null = null;
+let notificationPrimed = false;
+const seenFindingIds = new Set<string>();
+const seenActionIds = new Set<string>();
 
 function dataHome(): string {
   const configured = process.env.HOMUNCULA_HOME;
@@ -103,33 +107,230 @@ function startBackend(): void {
   });
 }
 
-function installApiBridge(): void {
-  ipcMain.handle(
-    "homuncula:request",
-    async (_event, path: string, method: string = "GET", body?: unknown) => {
-      if (!ALLOWED_API_PATH.test(path) || path.includes("://")) {
-        throw new Error("Invalid local API path");
-      }
+async function runHostCommand(command: string, args: string[]): Promise<{
+  returncode: number | null;
+  stdout: string;
+  stderr: string;
+}> {
+  return new Promise((resolveCommand, rejectCommand) => {
+    const child = spawn(command, args, {
+      windowsHide: false,
+      stdio: "pipe"
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => {
+      stdout = (stdout + chunk.toString()).slice(-100000);
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr = (stderr + chunk.toString()).slice(-100000);
+    });
+    child.once("error", rejectCommand);
+    child.once("exit", (code) => {
+      resolveCommand({ returncode: code, stdout, stderr });
+    });
+  });
+}
 
-      const headers: Record<string, string> = {
-        Authorization: "Bearer " + ownerToken
+async function installOllama(): Promise<{
+  returncode: number | null;
+  stdout: string;
+  stderr: string;
+}> {
+  if (process.platform !== "win32") {
+    throw new Error("One-click Ollama installation is currently available on Windows only.");
+  }
+  return runHostCommand("winget", [
+    "install",
+    "--id",
+    "Ollama.Ollama",
+    "-e",
+    "--accept-package-agreements",
+    "--accept-source-agreements"
+  ]);
+}
+
+async function restartBackend(): Promise<void> {
+  const current = backend;
+  backend = null;
+  if (current && !current.killed) {
+    await new Promise<void>((resolveRestart) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        resolveRestart();
       };
-      if (body !== undefined) headers["Content-Type"] = "application/json";
+      current.once("exit", finish);
+      current.kill();
+      setTimeout(finish, 2000);
+    });
+  }
+  startBackend();
+}
 
-      const response = await fetch(API_BASE + path, {
-        method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body)
+async function apiRequest(
+  path: string,
+  method: string = "GET",
+  body?: unknown
+): Promise<any> {
+  if (!ALLOWED_API_PATH.test(path) || path.includes("://")) {
+    throw new Error("Invalid local API path");
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: "Bearer " + ownerToken
+  };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+
+  const response = await fetch(API_BASE + path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || "Homuncula request failed");
+  }
+
+  if (response.status === 204) return null;
+  return response.json();
+}
+
+function showNotification(title: string, body: string): void {
+  if (!Notification.isSupported()) return;
+  const notification = new Notification({
+    title,
+    body: body.slice(0, 240),
+    silent: false
+  });
+  notification.on("click", showWindow);
+  notification.show();
+}
+
+async function pollNotifications(): Promise<void> {
+  try {
+    const state = await apiRequest("/state");
+    const findings = Array.isArray(state.findings) ? state.findings : [];
+    const actions = Array.isArray(state.pending_actions) ? state.pending_actions : [];
+
+    if (!notificationPrimed) {
+      for (const finding of findings) seenFindingIds.add(String(finding.id));
+      for (const action of actions) seenActionIds.add(String(action.id));
+      notificationPrimed = true;
+      return;
+    }
+
+    const focused = Boolean(mainWindow && mainWindow.isVisible() && mainWindow.isFocused());
+
+    for (const finding of findings) {
+      const id = String(finding.id);
+      if (seenFindingIds.has(id)) continue;
+      seenFindingIds.add(id);
+      if (!focused) {
+        showNotification(
+          String(finding.title || "Homuncula found something"),
+          String(finding.summary || "A new finding needs your attention.")
+        );
+      }
+    }
+
+    for (const action of actions) {
+      const id = String(action.id);
+      if (seenActionIds.has(id)) continue;
+      seenActionIds.add(id);
+      if (!focused) {
+        showNotification(
+          "Homuncula needs approval",
+          String(action.preview || action.intent || "A local action is waiting for approval.")
+        );
+      }
+    }
+  } catch {
+    // Runtime startup and restarts are handled by the normal health/recovery path.
+  }
+}
+
+function startNotificationMonitor(): void {
+  if (notificationTimer) return;
+  void pollNotifications();
+  notificationTimer = setInterval(() => void pollNotifications(), 8000);
+}
+
+function startupSettings(): { supported: boolean; openAtLogin: boolean } {
+  if (!app.isPackaged) {
+    return { supported: false, openAtLogin: false };
+  }
+  return {
+    supported: true,
+    openAtLogin: app.getLoginItemSettings().openAtLogin
+  };
+}
+
+function setLaunchAtLogin(enabled: boolean): { supported: boolean; openAtLogin: boolean } {
+  if (!app.isPackaged) {
+    return { supported: false, openAtLogin: false };
+  }
+  app.setLoginItemSettings({
+    openAtLogin: enabled,
+    openAsHidden: true
+  });
+  return startupSettings();
+}
+
+function installApiBridge(): void {
+  ipcMain.handle("homuncula:voice-transcribe", async (_event, audio: Uint8Array) => {
+    const response = await fetch(API_BASE + "/voice/transcribe", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + ownerToken,
+        "Content-Type": "audio/wav"
+      },
+      body: Buffer.from(audio)
+    });
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || "Local transcription failed");
+    }
+    return response.json();
+  });
+
+  ipcMain.handle(
+    "homuncula:voice-synthesize",
+    async (_event, text: string, speaker: number = 10, speed: number = 1.0) => {
+      const response = await fetch(API_BASE + "/voice/synthesize", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + ownerToken,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ text, speaker, speed })
       });
-
       if (!response.ok) {
         const message = await response.text();
-        throw new Error(message || "Homuncula request failed");
+        throw new Error(message || "Local speech synthesis failed");
       }
-
-      if (response.status === 204) return null;
-      return response.json();
+      return new Uint8Array(await response.arrayBuffer());
     }
+  );
+
+  ipcMain.handle("homuncula:install-ollama", async () => installOllama());
+
+  ipcMain.handle("homuncula:restart-backend", async () => {
+    await restartBackend();
+    return { restarted: true };
+  });
+
+  ipcMain.handle("homuncula:startup-settings", () => startupSettings());
+  ipcMain.handle("homuncula:set-launch-at-login", (_event, enabled: boolean) =>
+    setLaunchAtLogin(Boolean(enabled))
+  );
+
+  ipcMain.handle(
+    "homuncula:request",
+    async (_event, path: string, method: string = "GET", body?: unknown) =>
+      apiRequest(path, method, body)
   );
 }
 
@@ -160,7 +361,11 @@ function createWindow(): void {
   });
   mainWindow = window;
 
-  window.on("ready-to-show", () => window.show());
+  window.on("ready-to-show", () => {
+    const launchedAtLogin =
+      app.isPackaged && app.getLoginItemSettings().wasOpenedAtLogin;
+    if (!launchedAtLogin) window.show();
+  });
   window.on("close", (event) => {
     if (!quitting) {
       event.preventDefault();
@@ -205,12 +410,17 @@ app.whenReady().then(() => {
   installApiBridge();
   createTray();
   createWindow();
+  startNotificationMonitor();
 
   app.on("activate", showWindow);
 });
 
 app.on("before-quit", () => {
   quitting = true;
+  if (notificationTimer) {
+    clearInterval(notificationTimer);
+    notificationTimer = null;
+  }
   if (backend && !backend.killed) {
     backend.kill();
   }

@@ -60,6 +60,7 @@ class Sentinel:
             "process.start",
             "browser.interact",
             "browser.upload",
+            "browser.download",
             "windows.ui.interact",
             "network.http",
             "skill.install",

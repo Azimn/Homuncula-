@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import os
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from .auth import token_matches
@@ -16,10 +17,11 @@ from .config import Settings
 from .context import ContextCompiler
 from .db import Database
 from .events import EventHub, WorkspaceEventSource
+from .git_inspector import GitInspector, GitUnavailable
 from .memory import MemoryStore
 from .plans import PlanStore
 from .processes import BackgroundProcessManager
-from .provider import OllamaProvider
+from .provider import OllamaProvider, ProviderError
 from .runtime import HomunculaRuntime, WakeScheduler
 from .secrets_store import (
     MemorySecretStore,
@@ -29,6 +31,7 @@ from .secrets_store import (
 )
 from .sentinel import Sentinel
 from .skills import SkillStore
+from .voice import VoiceManager, VoiceModelError, VoiceUnavailable
 from .windows_ui import WindowsUIProvider
 
 
@@ -72,6 +75,22 @@ class MemoryRevisionRequest(BaseModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
+class EvidenceObservationRequest(BaseModel):
+    source_kind: str = Field(min_length=1, max_length=80)
+    source_locator: str = Field(min_length=1, max_length=4000)
+    source_title: str | None = Field(default=None, max_length=500)
+    content: str = Field(min_length=1, max_length=50000)
+    responsibility_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvidenceDossierRequest(BaseModel):
+    claim: str = Field(min_length=8, max_length=8000)
+    observation_ids: list[str] = Field(min_length=1, max_length=20)
+    responsibility_id: str | None = None
+    unknowns: list[str] = Field(default_factory=list, max_length=20)
+
+
 class GrantRequest(BaseModel):
     capability: str
     resource_pattern: str
@@ -80,6 +99,20 @@ class GrantRequest(BaseModel):
 
 class SecretRequest(BaseModel):
     value: str = Field(min_length=1)
+
+
+class ModelRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
+class VoiceInstallRequest(BaseModel):
+    component: Literal["asr", "tts"]
+
+
+class VoiceSynthesisRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=12000)
+    speaker: int = Field(default=10, ge=0, le=10)
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
 
 
 def create_app(
@@ -94,7 +127,9 @@ def create_app(
     db.initialize()
     memory = MemoryStore(db)
     sentinel = Sentinel(db)
-    provider = OllamaProvider(settings.ollama_base_url, settings.model)
+    git = GitInspector(settings.workspace)
+    selected_model = db.setting("runtime.model", settings.model) or settings.model
+    provider = OllamaProvider(settings.ollama_base_url, selected_model)
     computer = WindowsHostComputer(settings.workspace)
     plans = PlanStore(db)
     skills = SkillStore(settings.home / "skills")
@@ -112,6 +147,7 @@ def create_app(
         in {"1", "true", "yes"},
     )
     windows_ui = windows_ui or WindowsUIProvider()
+    voice = VoiceManager(settings.home)
 
     runtime_holder: dict[str, HomunculaRuntime] = {}
 
@@ -145,6 +181,7 @@ def create_app(
         processes,
         plans,
         skills,
+        review_enabled=settings.review_enabled,
     )
     runtime_holder["runtime"] = runtime
     scheduler = WakeScheduler(db, runtime.run_responsibility)
@@ -183,6 +220,7 @@ def create_app(
         finally:
             workspace_events.stop()
             scheduler.stop()
+            await runtime.shutdown()
             await processes.shutdown()
             await browser.close()
             await scheduler_task
@@ -191,16 +229,18 @@ def create_app(
 
     app = FastAPI(
         title="Homuncula",
-        version="0.2.0",
+        version="0.3.0",
         lifespan=lifespan,
     )
     app.state.settings = settings
     app.state.db = db
     app.state.memory = memory
+    app.state.evidence = runtime.evidence
     app.state.sentinel = sentinel
     app.state.runtime = runtime
     app.state.events = event_hub
     app.state.secrets = secret_store
+    app.state.voice = voice
 
     @app.middleware("http")
     async def owner_auth(request: Request, call_next):
@@ -227,14 +267,93 @@ def create_app(
     async def health() -> dict[str, Any]:
         return {
             "ok": True,
-            "version": "0.2.0",
+            "version": "0.3.0",
             "workspace": str(settings.workspace),
             "database": str(settings.db_path),
+            "schema": db.schema_status(),
             "proactive_enabled": settings.proactive_enabled,
+            "review_enabled": settings.review_enabled,
             "browser_channel": settings.browser_channel,
             "secret_store": type(secret_store).__name__,
             "provider": await provider.health(),
         }
+
+    @app.get("/models")
+    async def models() -> dict[str, Any]:
+        try:
+            available = await provider.list_models()
+            return {
+                "ok": True,
+                "selected": provider.model,
+                "available": available,
+            }
+        except (httpx.HTTPError, ValueError, ProviderError) as exc:
+            return {
+                "ok": False,
+                "selected": provider.model,
+                "available": [],
+                "error": str(exc),
+            }
+
+    @app.post("/models/select")
+    async def select_model(request: ModelRequest) -> dict[str, str]:
+        try:
+            available = await provider.list_models()
+            if request.model not in available:
+                raise HTTPException(status_code=404, detail="Model is not installed")
+            selected = provider.select_model(request.model)
+            db.set_setting("runtime.model", selected)
+            return {"model": selected}
+        except HTTPException:
+            raise
+        except (httpx.HTTPError, ValueError, ProviderError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/models/pull")
+    async def pull_model(request: ModelRequest) -> dict[str, Any]:
+        try:
+            result = await provider.pull_model(request.model)
+            selected = provider.select_model(request.model)
+            db.set_setting("runtime.model", selected)
+            return {"model": selected, "result": result}
+        except (httpx.HTTPError, ValueError, ProviderError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/voice/status")
+    async def voice_status() -> dict[str, Any]:
+        return voice.status()
+
+    @app.post("/voice/install")
+    async def voice_install(request: VoiceInstallRequest) -> dict[str, Any]:
+        try:
+            return await voice.install(request.component)
+        except (httpx.HTTPError, VoiceModelError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/voice/transcribe")
+    async def voice_transcribe(request: Request) -> dict[str, Any]:
+        raw = await request.body()
+        if not raw:
+            raise HTTPException(status_code=400, detail="WAV audio is required")
+        if len(raw) > 25 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Voice input is too large")
+        try:
+            return await asyncio.to_thread(voice.transcribe_wav, raw)
+        except (VoiceUnavailable, VoiceModelError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/voice/synthesize")
+    async def voice_synthesize(request: VoiceSynthesisRequest) -> Response:
+        try:
+            wav = await asyncio.to_thread(
+                voice.synthesize,
+                request.text,
+                speaker=request.speaker,
+                speed=request.speed,
+            )
+            return Response(content=wav, media_type="audio/wav")
+        except (VoiceUnavailable, VoiceModelError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/state")
     async def state() -> dict[str, Any]:
@@ -285,7 +404,7 @@ def create_app(
             return await runtime.chat(thread_id, request.content)
         except KeyError:
             raise HTTPException(status_code=404, detail="Thread not found") from None
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, ProviderError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.post("/responsibilities")
@@ -391,6 +510,114 @@ def create_app(
         except KeyError:
             raise HTTPException(status_code=404, detail="Memory not found") from None
 
+    @app.get("/evidence/receipts")
+    async def evidence_receipts(
+        responsibility_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        return runtime.evidence.list_read_receipts(
+            responsibility_id=responsibility_id,
+            limit=limit,
+        )
+
+    @app.get("/evidence/receipts/{receipt_id}")
+    async def evidence_receipt_get(receipt_id: str) -> dict[str, Any]:
+        try:
+            return runtime.evidence.get_read_receipt(receipt_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail="Evidence receipt not found",
+            ) from None
+
+    @app.post("/evidence/observations")
+    async def evidence_capture(
+        request: EvidenceObservationRequest,
+    ) -> dict[str, Any]:
+        try:
+            return runtime.evidence.capture_observation(
+                source_kind=request.source_kind,
+                source_locator=request.source_locator,
+                source_title=request.source_title,
+                content=request.content,
+                responsibility_id=request.responsibility_id,
+                metadata=request.metadata,
+            )
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail="Responsibility not found",
+            ) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/evidence/observations")
+    async def evidence_observations(
+        responsibility_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        return runtime.evidence.list_observations(
+            responsibility_id=responsibility_id,
+            limit=limit,
+        )
+
+    @app.post("/evidence/dossiers")
+    async def evidence_dossier_create(
+        request: EvidenceDossierRequest,
+    ) -> dict[str, Any]:
+        try:
+            return runtime.evidence.create_dossier(
+                request.claim,
+                request.observation_ids,
+                responsibility_id=request.responsibility_id,
+                unknowns=request.unknowns,
+            )
+        except KeyError as exc:
+            missing = str(exc.args[0])
+            detail = (
+                "Responsibility not found"
+                if request.responsibility_id == missing
+                else f"Evidence observation not found: {missing}"
+            )
+            raise HTTPException(status_code=404, detail=detail) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/evidence/dossiers")
+    async def evidence_dossiers(
+        responsibility_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        try:
+            return runtime.evidence.list_dossiers(
+                responsibility_id=responsibility_id,
+                status=status,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/evidence/dossiers/{dossier_id}")
+    async def evidence_dossier_get(dossier_id: str) -> dict[str, Any]:
+        try:
+            return runtime.evidence.get_dossier(dossier_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail="Evidence dossier not found",
+            ) from None
+
+    @app.post("/evidence/dossiers/{dossier_id}/review")
+    async def evidence_dossier_review(dossier_id: str) -> dict[str, Any]:
+        try:
+            return await runtime.evidence_council.review(dossier_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail="Evidence dossier not found",
+            ) from None
+
     @app.get("/findings")
     async def findings(status: str | None = None) -> list[dict[str, Any]]:
         return runtime.list_findings(status=status)
@@ -429,6 +656,16 @@ def create_app(
             skills.remove(skill_name)
         except KeyError:
             raise HTTPException(status_code=404, detail="Skill not found") from None
+
+    @app.get("/verification")
+    async def verification_list(
+        responsibility_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        return runtime.verification.list(
+            responsibility_id=responsibility_id,
+            limit=limit,
+        )
 
     @app.get("/actions")
     async def actions(status: str | None = None) -> list[dict[str, Any]]:
@@ -488,6 +725,25 @@ def create_app(
     @app.delete("/grants/{grant_id}", status_code=204)
     async def revoke_grant(grant_id: str) -> None:
         sentinel.revoke_grant(grant_id)
+
+    @app.get("/computer/git")
+    async def computer_git() -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(git.status)
+        except GitUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/computer/git/diff")
+    async def computer_git_diff(
+        path: str,
+        staged: bool = False,
+    ) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(git.diff, path, staged=staged)
+        except PermissionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except GitUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/computer/status")
     async def computer_status() -> dict[str, Any]:

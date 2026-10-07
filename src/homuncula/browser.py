@@ -18,6 +18,24 @@ class BrowserUnavailable(RuntimeError):
 class BrowserReferenceError(LookupError):
     pass
 
+class BrowserNavigationError(ValueError):
+    pass
+
+
+class BrowserDownloadError(RuntimeError):
+    pass
+
+def validate_navigation_url(url: str) -> str:
+    candidate = url.strip()
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"}:
+        raise BrowserNavigationError("Browser navigation is limited to HTTP and HTTPS")
+    if not parsed.hostname:
+        raise BrowserNavigationError("Browser navigation requires a valid host")
+    if parsed.username is not None or parsed.password is not None:
+        raise BrowserNavigationError("Credentials are not allowed in browser navigation URLs")
+    return candidate
+
 class BrowserProvider:
     def __init__(
         self,
@@ -76,8 +94,13 @@ class BrowserProvider:
             self._playwright = None
 
     async def navigate(self, url: str) -> dict[str, Any]:
+        safe_url = validate_navigation_url(url)
         page = await self._ensure_page()
-        response = await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+        response = await page.goto(
+            safe_url,
+            wait_until="domcontentloaded",
+            timeout=45_000,
+        )
         return {
             "url": page.url,
             "title": await page.title(),
@@ -102,6 +125,8 @@ class BrowserProvider:
               role: node.getAttribute('role'),
               name: node.getAttribute('aria-label') || node.innerText || node.value || '',
               type: node.getAttribute('type'),
+              href: node.getAttribute('href'),
+              download: node.hasAttribute('download'),
               disabled: Boolean(node.disabled)
             }))
             """
@@ -144,6 +169,47 @@ class BrowserProvider:
         locator = await self._locator(reference)
         await locator.set_input_files(str(path), timeout=15_000)
         return {"ref": reference, "path": path.name}
+
+    async def download(
+        self,
+        reference: str,
+        destination_dir: Path,
+        *,
+        max_bytes: int = 250 * 1024 * 1024,
+    ) -> dict[str, Any]:
+        locator = await self._locator(reference)
+        destination_dir = Path(destination_dir)
+        destination_dir.mkdir(parents=True, exist_ok=True)
+
+        page = await self._ensure_page()
+        async with page.expect_download(timeout=45_000) as download_info:
+            await locator.click(timeout=15_000)
+        download = await download_info.value
+
+        suggested = Path(download.suggested_filename or "download").name
+        if not suggested or suggested in {".", ".."}:
+            suggested = "download"
+
+        target = destination_dir / suggested
+        stem = target.stem
+        suffix = target.suffix
+        counter = 1
+        while target.exists():
+            target = destination_dir / f"{stem}-{counter}{suffix}"
+            counter += 1
+
+        await download.save_as(str(target))
+        size = target.stat().st_size
+        if size > max(1, max_bytes):
+            target.unlink(missing_ok=True)
+            raise BrowserDownloadError(
+                f"Download exceeded the configured size limit ({size} bytes)"
+            )
+        return {
+            "ref": reference,
+            "filename": target.name,
+            "bytes": size,
+        }
 
     async def _ensure_page(self) -> Any:
         if self._page is None:

@@ -4,6 +4,20 @@ declare global {
   interface Window {
     homuncula: {
       health: () => Promise<any>;
+      voiceStatus: () => Promise<any>;
+      installVoice: (component: "asr" | "tts") => Promise<any>;
+      transcribeVoice: (audio: Uint8Array) => Promise<any>;
+      synthesizeVoice: (
+        text: string,
+        speaker?: number,
+        speed?: number
+      ) => Promise<Uint8Array>;
+      installOllama: () => Promise<any>;
+      restartHost: () => Promise<any>;
+      startupSettings: () => Promise<{ supported: boolean; openAtLogin: boolean }>;
+      setLaunchAtLogin: (
+        enabled: boolean
+      ) => Promise<{ supported: boolean; openAtLogin: boolean }>;
       state: () => Promise<any>;
       pauseAutonomy: () => Promise<any>;
       resumeAutonomy: () => Promise<any>;
@@ -44,8 +58,20 @@ declare global {
       revokeGrant: (id: string) => Promise<any>;
       processes: () => Promise<any[]>;
       subscriptions: () => Promise<any[]>;
+      plans: () => Promise<any[]>;
+      skills: () => Promise<any[]>;
+      verification: () => Promise<any[]>;
+      evidenceDossiers: (status?: string) => Promise<any[]>;
+      evidenceDossier: (id: string) => Promise<any>;
+      evidenceReceipts: () => Promise<any[]>;
+      reviewEvidence: (id: string) => Promise<any>;
+      models: () => Promise<any>;
+      selectModel: (model: string) => Promise<any>;
+      pullModel: (model: string) => Promise<any>;
       computerStatus: () => Promise<any>;
       windows: () => Promise<any>;
+      gitStatus: () => Promise<any>;
+      gitDiff: (path: string, staged?: boolean) => Promise<any>;
     };
   }
 }
