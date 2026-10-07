@@ -276,17 +276,15 @@ The application does not inherit the Hermes fork's author-specific five-agent en
 
 ## Current intentional gaps
 
-Pixel-level visual computer control is not yet implemented.
+Pixel-level visual computer control is not yet implemented. Browser semantics and Windows UI Automation remain the preferred structured control paths.
 
 The default semantic embedder is lightweight and service-free rather than a dedicated neural embedding model.
 
-Fully local speech recognition and high-quality local text-to-speech are not yet integrated.
+Process containment now bounds inherited environment, captured output, timeouts, and process-tree lifecycle, but generated or untrusted code does not yet run inside a full Windows security sandbox such as an AppContainer or restricted-token boundary.
 
-Generated-code isolation is workspace-scoped but does not yet use a dedicated Windows sandbox profile.
+External service connectors remain limited. New connectors must preserve the existing provenance, authentication, and Sentinel authority boundaries.
 
-Database schema creation is additive and does not yet provide a formal migration framework.
-
-Public release signing requires an external code-signing certificate.
+Public release signing and a production update/rollback channel require release infrastructure outside the repository.
 
 These gaps must preserve the existing trust boundaries when implemented.
 
