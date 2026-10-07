@@ -26,6 +26,14 @@ def classify_command(argv: list[str]) -> str:
     return "command"
 
 
+def verification_output_summary(text: str, *, truncated: bool) -> str:
+    tail_limit = 3900 if truncated else 4000
+    summary = redact_text(text[-tail_limit:])
+    if truncated:
+        return "[captured output truncated]\n" + summary
+    return summary
+
+
 class VerificationStore:
     def __init__(self, db: Database):
         self.db = db
@@ -39,6 +47,12 @@ class VerificationStore:
     ) -> dict[str, Any]:
         argv = [str(part) for part in result.get("argv", [])]
         returncode = int(result.get("returncode", -1))
+        timed_out = bool(result.get("timed_out"))
+        status = "timed_out" if timed_out else ("passed" if returncode == 0 else "failed")
+
+        stdout = str(result.get("stdout", ""))
+        stderr = str(result.get("stderr", ""))
+
         record_id = "verify_" + uuid.uuid4().hex
         self.db.execute(
             """
@@ -54,10 +68,16 @@ class VerificationStore:
                 classify_command(argv),
                 self.db.json(argv),
                 str(result.get("cwd", ".")),
-                "passed" if returncode == 0 else "failed",
+                status,
                 returncode,
-                redact_text(str(result.get("stdout", ""))[-4000:]),
-                redact_text(str(result.get("stderr", ""))[-4000:]),
+                verification_output_summary(
+                    stdout,
+                    truncated=bool(result.get("stdout_truncated")),
+                ),
+                verification_output_summary(
+                    stderr,
+                    truncated=bool(result.get("stderr_truncated")),
+                ),
                 now_iso(),
             ),
         )
@@ -110,5 +130,5 @@ class VerificationStore:
         return {
             "latest_by_kind": latest_by_kind,
             "total": len(rows),
-            "has_failed": any(row["status"] == "failed" for row in rows),
+            "has_failed": any(row["status"] != "passed" for row in rows),
         }

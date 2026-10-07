@@ -180,11 +180,17 @@ Structured accessibility control remains the primary desktop interface. Pixel-le
 
 Foreground process execution is governed separately from read-only process status.
 
-After a foreground command completes, the runtime records a verification event. Classification recognizes tests, quality checks, builds, inspections, and generic commands.
+Agent-launched commands use argv execution with shell disabled, workspace-scoped working directories, closed stdin, and a minimal inherited environment. The environment allowlist preserves ordinary runtime paths and platform variables while excluding arbitrary parent variables that may contain credentials or unrelated secrets.
+
+Foreground stdout and stderr are drained concurrently into fixed-size tail buffers. The runtime tracks total bytes produced and whether either stream was truncated, so large-output commands cannot force unbounded in-memory capture. A foreground timeout terminates the isolated process group/tree and returns explicit `timed_out` metadata rather than surfacing only a generic subprocess exception.
+
+After a foreground command completes, the runtime records a verification event. Classification recognizes tests, quality checks, builds, inspections, and generic commands. Timeout is a distinct verification status, and truncated captured output is marked in the persisted verification summary.
+
+Background processes use the same minimal environment and bounded stream capture. They run in isolated process groups/trees. Runtime shutdown first terminates active Homuncula-launched process trees, then waits for output-drain/bookkeeping tasks, preventing ordinary shutdown from abandoning long-running child processes.
+
+This layer is process containment, not a complete Windows security sandbox. It does not by itself deny filesystem access outside the workspace to a malicious child process, block child network access, or provide AppContainer/low-integrity-token isolation. Those stronger OS security boundaries remain separate future work.
 
 Verification evidence is injected into later responsibility context. The model is instructed not to claim broader verification than the recorded evidence supports.
-
-Background processes persist process metadata and captured output. Completion produces an event that can wake subscribed responsibilities.
 
 ## Loop guardrails
 
@@ -270,17 +276,15 @@ The application does not inherit the Hermes fork's author-specific five-agent en
 
 ## Current intentional gaps
 
-Pixel-level visual computer control is not yet implemented.
+Pixel-level visual computer control is not yet implemented. Browser semantics and Windows UI Automation remain the preferred structured control paths.
 
 The default semantic embedder is lightweight and service-free rather than a dedicated neural embedding model.
 
-Fully local speech recognition and high-quality local text-to-speech are not yet integrated.
+Process containment now bounds inherited environment, captured output, timeouts, and process-tree lifecycle, but generated or untrusted code does not yet run inside a full Windows security sandbox such as an AppContainer or restricted-token boundary.
 
-Generated-code isolation is workspace-scoped but does not yet use a dedicated Windows sandbox profile.
+External service connectors remain limited. New connectors must preserve the existing provenance, authentication, and Sentinel authority boundaries.
 
-Database schema creation is additive and does not yet provide a formal migration framework.
-
-Public release signing requires an external code-signing certificate.
+Public release signing and a production update/rollback channel require release infrastructure outside the repository.
 
 These gaps must preserve the existing trust boundaries when implemented.
 
